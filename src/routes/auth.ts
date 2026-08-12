@@ -110,10 +110,22 @@ authRoutes.get('/status', async (c) => {
   }
 
   const auth = await authenticate(c, db);
+  const pinSet = Boolean(anyUser[0]!.pinHash);
+
   return c.json({
     configured: true,
     authenticated: auth !== null,
-    displayName: auth ? anyUser[0]!.displayName : undefined,
+    /**
+     * False after a PIN reset. The hash is an HMAC peppered with MASTER_KEY,
+     * so a forgotten PIN cannot be recovered — only cleared, and only by
+     * someone with access to the D1 database (see scripts/reset-pin.mjs).
+     * Surfacing it here is what lets the app offer to set a new one instead
+     * of showing a lock screen nobody can open.
+     */
+    pinSet,
+    /** Echoed while recovering so the setup form can pin the same account. */
+    email: pinSet ? undefined : anyUser[0]!.email,
+    displayName: auth || !pinSet ? anyUser[0]!.displayName : undefined,
   });
 });
 

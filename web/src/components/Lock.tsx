@@ -91,10 +91,27 @@ export function Lock({ onUnlocked }: { onUnlocked: () => void }) {
   );
 }
 
-/** First-run configuration, shown only while no user exists. */
-export function Setup({ onDone }: { onDone: (captureToken: string) => void }) {
-  const [email, setEmail] = useState('');
-  const [displayName, setDisplayName] = useState('');
+/**
+ * First-run configuration, and the PIN recovery screen.
+ *
+ * They are the same form because the server treats them as the same call: the
+ * setup route accepts a PIN whenever the account has none, which is exactly
+ * the state a reset leaves behind.
+ */
+export function Setup({
+  onDone,
+  recovering,
+  presetEmail,
+  presetName,
+}: {
+  onDone: (captureToken: string) => void;
+  /** True when the account exists and only the PIN is being re-set. */
+  recovering?: boolean;
+  presetEmail?: string;
+  presetName?: string;
+}) {
+  const [email, setEmail] = useState(presetEmail ?? '');
+  const [displayName, setDisplayName] = useState(presetName ?? '');
   const [pin, setPin] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -124,13 +141,21 @@ export function Setup({ onDone }: { onDone: (captureToken: string) => void }) {
 
   return (
     <div className="lock">
-      <h1>Configurazione</h1>
-      <p>Serve solo una volta. Il PIN protegge l’app su questo dispositivo.</p>
+      <h1>{recovering ? 'Nuovo PIN' : 'Configurazione'}</h1>
+      <p>
+        {recovering
+          ? 'Il PIN precedente è stato azzerato. Scegline uno nuovo: attività, calendario e stime restano al loro posto.'
+          : 'Serve solo una volta. Il PIN protegge l’app su questo dispositivo.'}
+      </p>
 
       <div style={{ width: '100%', maxWidth: 340 }}>
         <label className="field">
           <span>Nome</span>
-          <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          <input
+            value={displayName}
+            readOnly={recovering}
+            onChange={(e) => setDisplayName(e.target.value)}
+          />
         </label>
         <label className="field">
           <span>Email</span>
@@ -138,6 +163,7 @@ export function Setup({ onDone }: { onDone: (captureToken: string) => void }) {
             type="email"
             autoComplete="email"
             value={email}
+            readOnly={recovering}
             onChange={(e) => setEmail(e.target.value)}
           />
         </label>
@@ -173,7 +199,7 @@ export function Setup({ onDone }: { onDone: (captureToken: string) => void }) {
           disabled={busy || pin.length < 4 || !email || !displayName}
           onClick={() => void submit()}
         >
-          {busy ? 'Creo…' : 'Crea account'}
+          {busy ? 'Salvo…' : recovering ? 'Imposta il nuovo PIN' : 'Crea account'}
         </button>
       </div>
     </div>

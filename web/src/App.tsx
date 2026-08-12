@@ -16,18 +16,37 @@ import {
 } from './lib/format';
 
 type View = 'day' | 'tasks' | 'shopping' | 'settings';
-type AuthState = 'loading' | 'setup' | 'locked' | 'unlocked';
+type AuthState = 'loading' | 'setup' | 'recover' | 'locked' | 'unlocked';
+
+interface AuthStatus {
+  configured: boolean;
+  authenticated: boolean;
+  pinSet?: boolean;
+  email?: string;
+  displayName?: string;
+}
 
 export function App() {
   const [auth, setAuth] = useState<AuthState>('loading');
   const [view, setView] = useState<View>('day');
 
+  const [status, setStatus] = useState<AuthStatus | null>(null);
+
   useEffect(() => {
     void api
-      .get<{ configured: boolean; authenticated: boolean }>('/auth/status')
+      .get<AuthStatus>('/auth/status')
       .then(({ data }) => {
+        setStatus(data);
         setAuth(
-          !data.configured ? 'setup' : data.authenticated ? 'unlocked' : 'locked',
+          !data.configured
+            ? 'setup'
+            : // An account with no PIN has been through a reset; offer to set
+              // a new one rather than a lock screen that cannot be opened.
+              data.pinSet === false
+              ? 'recover'
+              : data.authenticated
+                ? 'unlocked'
+                : 'locked',
         );
       })
       .catch(() => setAuth('locked'));
@@ -44,6 +63,15 @@ export function App() {
 
   if (auth === 'loading') return <div className="empty">Carico…</div>;
   if (auth === 'setup') return <Setup onDone={() => setAuth('unlocked')} />;
+  if (auth === 'recover')
+    return (
+      <Setup
+        recovering
+        presetEmail={status?.email}
+        presetName={status?.displayName}
+        onDone={() => setAuth('unlocked')}
+      />
+    );
   if (auth === 'locked') return <Lock onUnlocked={() => setAuth('unlocked')} />;
 
   return <Shell view={view} setView={setView} />;
