@@ -170,7 +170,7 @@ function buildSystemPrompt(context: InterpretContext): string {
 
 CONTESTO
 - Oggi è ${context.todayIso} (${context.weekdayName}), fuso orario Europe/Rome.
-- Aree disponibili: general (attività personali e varie), mg (lavoro MG Integration), university (università), heemia (progetto Heemia), personal, health, errand (commissioni).
+- Aree disponibili: general (attività personali e varie), mg (lavoro MG Integration), university (università), heemia (progetto Heemia), career (carriera, ICT, formazione professionale, candidature), personal, health, errand (commissioni).
 - Attività aperte più rilevanti, per riconoscere i riferimenti:
 ${context.openTasks.map((t) => `  - ${t.title}${t.area ? ` [${t.area}]` : ''}`).join('\n') || '  (nessuna)'}
 - Articoli sulla lista della spesa:

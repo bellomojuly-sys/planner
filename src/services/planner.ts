@@ -17,11 +17,10 @@ import type {
 } from '../scheduler/types';
 import type { DepMap } from '../scheduler/dependencies';
 import { loadBusyIntervals, inferPhaseDependencies } from './sync';
+import { getPlannerCalendarId } from './calendar-sources';
 import { DAY_MS, localDateKey, formatRange } from '../lib/time';
 import { toPlannerError } from '../lib/errors';
 import type { Env } from '../env';
-
-export const PLANNER_CALENDAR_ID = 'primary';
 
 export type RescheduleTrigger =
   | 'cron'
@@ -73,11 +72,12 @@ export async function replan(
     const now = Date.now();
     const horizonEnd = now + prefs.planningHorizonDays * DAY_MS;
 
-    const [openTasks, deps, busy, existingBlocks] = await Promise.all([
+    const [openTasks, deps, busy, existingBlocks, plannerCalendarId] = await Promise.all([
       loadSchedulableTasks(db, userId),
       loadDependencies(db, userId),
       loadBusyIntervals(db, userId, now, horizonEnd),
       loadFutureBlocks(db, userId, now),
+      getPlannerCalendarId(db, userId),
     ]);
 
     const pinnedBlocks: PlacedBlock[] = existingBlocks
@@ -106,6 +106,7 @@ export async function replan(
       prefs.timezone,
       existingBlocks,
       result,
+      plannerCalendarId,
     );
 
     await db
@@ -268,6 +269,7 @@ async function reconcileBlocks(
   timezone: string,
   existing: Array<typeof scheduledBlocks.$inferSelect>,
   result: ScheduleResult,
+  plannerCalendarId: string,
 ): Promise<PlanDiff> {
   const diff: PlanDiff = {
     created: 0,
@@ -320,7 +322,7 @@ async function reconcileBlocks(
         })
         .returning({ id: scheduledBlocks.id });
 
-      await enqueueCalendarUpsert(db, userId, inserted!.id);
+      await enqueueCalendarUpsert(db, userId, inserted!.id, plannerCalendarId);
       diff.created++;
       diff.changes.push(
         `Aggiunto: ${block.title} — ${formatRange(block.start, block.end, timezone)}`,
@@ -349,7 +351,7 @@ async function reconcileBlocks(
       })
       .where(eq(scheduledBlocks.id, prior.id));
 
-    await enqueueCalendarUpsert(db, userId, prior.id);
+    await enqueueCalendarUpsert(db, userId, prior.id, plannerCalendarId);
     diff.moved++;
     diff.changes.push(
       `Spostato: ${block.title} → ${formatRange(block.start, block.end, timezone)}`,
@@ -364,7 +366,7 @@ async function reconcileBlocks(
       await db.insert(outbox).values({
         userId,
         kind: 'google_delete',
-        payload: { eventId: block.googleEventId, calendarId: PLANNER_CALENDAR_ID },
+        payload: { eventId: block.googleEventId, calendarId: plannerCalendarId },
       });
     }
     await db.delete(scheduledBlocks).where(eq(scheduledBlocks.id, block.id));
@@ -411,11 +413,12 @@ async function enqueueCalendarUpsert(
   db: DB,
   userId: string,
   blockId: string,
+  calendarId: string,
 ): Promise<void> {
   await db.insert(outbox).values({
     userId,
     kind: 'google_upsert',
-    payload: { blockId, calendarId: PLANNER_CALENDAR_ID },
+    payload: { blockId, calendarId },
   });
 }
 
@@ -441,6 +444,7 @@ export async function moveBlock(
   }
 
   const delta = newStart - block.startAt;
+  const plannerCalendarId = await getPlannerCalendarId(db, userId);
 
   // A gym session stands alone; a task block may be one sitting of several.
   if (!block.taskId) {
@@ -449,7 +453,7 @@ export async function moveBlock(
       .set({ startAt: newStart, endAt: newEnd, pinned: true, syncState: 'pending' })
       .where(eq(scheduledBlocks.id, blockId));
 
-    await enqueueCalendarUpsert(db, userId, blockId);
+    await enqueueCalendarUpsert(db, userId, blockId, plannerCalendarId);
     return replan(env, db, userId, 'task_moved');
   }
 
@@ -483,7 +487,7 @@ export async function moveBlock(
       })
       .where(eq(scheduledBlocks.id, part.id));
 
-    await enqueueCalendarUpsert(db, userId, part.id);
+    await enqueueCalendarUpsert(db, userId, part.id, plannerCalendarId);
   }
 
   const earliest = Math.min(

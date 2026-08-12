@@ -93,6 +93,9 @@ export interface CalendarEventView {
   kind: 'fixed' | 'soft' | 'planner';
   isShift: boolean;
   location: string | null;
+  calendarId: string;
+  calendarName: string;
+  color: string;
 }
 
 export interface PlanResponse {
@@ -146,6 +149,16 @@ export interface SettingsView {
     enabled: boolean;
     lastSyncedAt: number | null;
     lastSyncError: string | null;
+  }>;
+  calendars: Array<{
+    id: string;
+    calendarId: string;
+    summary: string;
+    role: 'busy' | 'context' | 'ignore' | 'planner';
+    color: string;
+    accessRole: 'freeBusyReader' | 'reader' | 'writer' | 'owner';
+    primary: boolean;
+    enabled: boolean;
   }>;
   accuracy: { samples: number; meanRatio: number; withinTolerance: number };
   integrations: Record<string, boolean>;

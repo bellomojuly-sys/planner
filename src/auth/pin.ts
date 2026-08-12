@@ -9,14 +9,22 @@ import {
 } from '../crypto/encryption';
 
 /**
- * A 6-digit PIN has only a million combinations, so the hash alone is not the
- * defence — the lockout is. PBKDF2 makes each guess expensive; the escalating
- * lockout after 5 failures makes an online attack impractical.
+ * A short PIN cannot safely be protected by an unkeyed database hash alone.
+ * New hashes therefore use HMAC-SHA256 with MASTER_KEY as a server-side pepper
+ * plus a per-user salt. A D1 dump is not enough to test PIN guesses offline,
+ * while the escalating lockout below stops online guessing.
+ *
+ * `pinIterations > 0` remains readable for legacy PBKDF2 rows. New HMAC rows
+ * use `pinIterations = 0`; unlike 210k-round PBKDF2, HMAC also stays inside the
+ * CPU allowance of a Cloudflare Workers Free request.
  */
 
-const DEFAULT_ITERATIONS = 210_000;
+const HMAC_VERSION = 0;
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_BASE_MS = 60_000;
+
+let cachedPepper: CryptoKey | null = null;
+let cachedPepperMaterial: string | null = null;
 
 export function assertPinFormat(pin: string): void {
   if (!/^\d{4,10}$/.test(pin)) {
@@ -26,7 +34,7 @@ export function assertPinFormat(pin: string): void {
   }
 }
 
-async function derive(
+async function deriveLegacyPbkdf2(
   pin: string,
   saltB64: string,
   iterations: number,
@@ -51,21 +59,72 @@ async function derive(
   return bytesToBase64(new Uint8Array(bits));
 }
 
+async function importPepper(pepperB64: string): Promise<CryptoKey> {
+  if (cachedPepper && cachedPepperMaterial === pepperB64) return cachedPepper;
+
+  let raw: Uint8Array<ArrayBuffer>;
+  try {
+    raw = base64ToBytes(pepperB64);
+  } catch {
+    throw new PlannerError('config_missing', {
+      message: 'PIN pepper is not valid base64',
+      userMessage: 'Chiave di sicurezza del PIN non valida.',
+    });
+  }
+  if (raw.length !== 32) {
+    throw new PlannerError('config_missing', {
+      message: `PIN pepper must decode to 32 bytes, got ${raw.length}`,
+      userMessage: 'Chiave di sicurezza del PIN non valida.',
+    });
+  }
+
+  cachedPepper = await crypto.subtle.importKey(
+    'raw',
+    raw,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  cachedPepperMaterial = pepperB64;
+  return cachedPepper;
+}
+
+export async function derivePinHash(
+  pin: string,
+  saltB64: string,
+  pepperB64: string,
+): Promise<string> {
+  const key = await importPepper(pepperB64);
+  const payload = new TextEncoder().encode(`planner-pin-v1\0${saltB64}\0${pin}`);
+  const signature = await crypto.subtle.sign('HMAC', key, payload);
+  return bytesToBase64(new Uint8Array(signature));
+}
+
+export async function createPinCredentials(
+  pin: string,
+  pepperB64: string,
+): Promise<{ pinHash: string; pinSalt: string; pinIterations: number }> {
+  assertPinFormat(pin);
+  const pinSalt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
+  return {
+    pinHash: await derivePinHash(pin, pinSalt, pepperB64),
+    pinSalt,
+    pinIterations: HMAC_VERSION,
+  };
+}
+
 export async function setPin(
   db: DB,
   userId: string,
   pin: string,
+  pepperB64: string,
 ): Promise<void> {
-  assertPinFormat(pin);
-  const salt = bytesToBase64(crypto.getRandomValues(new Uint8Array(16)));
-  const hash = await derive(pin, salt, DEFAULT_ITERATIONS);
+  const credentials = await createPinCredentials(pin, pepperB64);
 
   await db
     .update(users)
     .set({
-      pinHash: hash,
-      pinSalt: salt,
-      pinIterations: DEFAULT_ITERATIONS,
+      ...credentials,
       failedPinAttempts: 0,
       lockedUntil: null,
     })
@@ -81,6 +140,7 @@ export async function verifyPin(
   db: DB,
   userId: string,
   pin: string,
+  pepperB64: string,
 ): Promise<PinVerification> {
   const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
   if (!user) throw new PlannerError('unauthorized');
@@ -101,7 +161,10 @@ export async function verifyPin(
     });
   }
 
-  const candidate = await derive(pin, user.pinSalt, user.pinIterations);
+  const candidate =
+    user.pinIterations === HMAC_VERSION
+      ? await derivePinHash(pin, user.pinSalt, pepperB64)
+      : await deriveLegacyPbkdf2(pin, user.pinSalt, user.pinIterations);
   const ok = timingSafeEqual(candidate, user.pinHash);
 
   if (ok) {

@@ -11,8 +11,8 @@
     "build": "vite build --config web/vite.config.ts",
     "deploy": "npm run build && wrangler deploy",
     "db:generate": "drizzle-kit generate",
-    "db:migrate:local": "wrangler d1 migrations apply planner-db --local",
-    "db:migrate:remote": "wrangler d1 migrations apply planner-db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply giulia-personal-planner-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply giulia-personal-planner-db --remote",
     "seed": "node scripts/setup-sources.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

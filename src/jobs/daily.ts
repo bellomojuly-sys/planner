@@ -25,7 +25,14 @@ import type { Env } from '../env';
 export interface DayAgenda {
   dateKey: string;
   dayLabel: string;
-  fixed: Array<{ title: string; start: number; end: number; isShift: boolean }>;
+  fixed: Array<{
+    title: string;
+    start: number;
+    end: number;
+    allDay: boolean;
+    kind: 'fixed' | 'soft';
+    isShift: boolean;
+  }>;
   blocks: Array<{
     title: string;
     start: number;
@@ -90,11 +97,13 @@ export async function loadAgenda(
     dateKey: localDateKey(dayStart, timezone),
     dayLabel: formatDayLong(dayStart, timezone),
     fixed: events
-      .filter((e) => !e.cancelled && e.kind === 'fixed')
+      .filter((e) => !e.cancelled && e.kind !== 'planner')
       .map((e) => ({
         title: e.title,
         start: e.startAt,
         end: e.endAt,
+        allDay: e.allDay,
+        kind: e.kind === 'fixed' ? ('fixed' as const) : ('soft' as const),
         isShift: e.isShift,
       }))
       .sort((a, b) => a.start - b.start),
@@ -117,7 +126,7 @@ function renderAgenda(agenda: DayAgenda, timezone: string): string {
 
   for (const event of agenda.fixed) {
     lines.push(
-      `${formatRange(event.start, event.end, timezone)} — ${event.title}${event.isShift ? ' (turno)' : ''} [fisso]`,
+      `${event.allDay ? 'Tutto il giorno' : formatRange(event.start, event.end, timezone)} — ${event.title}${event.isShift ? ' (turno)' : ''} [${event.kind === 'fixed' ? 'fisso' : 'contesto'}]`,
     );
   }
   for (const block of agenda.blocks) {
@@ -128,6 +137,50 @@ function renderAgenda(agenda: DayAgenda, timezone: string): string {
 
   lines.sort();
   return lines.join('\n') || '(niente in programma)';
+}
+
+/**
+ * A deterministic, intentionally terse answer for the Siri shortcut.
+ * It includes only commitments that still matter today: fixed calendar events
+ * and actionable planner blocks. Context events, breaks, buffers, overdue
+ * lists and tomorrow are deliberately omitted.
+ */
+export function renderVoiceAgenda(
+  agenda: DayAgenda,
+  timezone: string,
+  now = Date.now(),
+): string {
+  const items = [
+    ...agenda.fixed
+      .filter((event) => event.kind === 'fixed' && event.end > now)
+      .map((event) => ({
+        title: event.title,
+        start: event.start,
+        end: event.end,
+        allDay: event.allDay,
+      })),
+    ...agenda.blocks
+      .filter(
+        (block) =>
+          block.kind !== 'break' && block.kind !== 'buffer' && block.end > now,
+      )
+      .map((block) => ({
+        title: block.title,
+        start: block.start,
+        end: block.end,
+        allDay: false,
+      })),
+  ].sort((a, b) => a.start - b.start);
+
+  if (items.length === 0) return 'Per oggi non hai più nulla in programma.';
+
+  const spoken = items.map((item) => {
+    if (item.allDay) return `per tutto il giorno, ${item.title}`;
+    if (item.start <= now && item.end > now) return `adesso, ${item.title}`;
+    return `alle ${formatTime(item.start, timezone)}, ${item.title}`;
+  });
+
+  return `Oggi: ${spoken.join('; ')}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +321,7 @@ export async function resolveReviewTime(
       and(
         eq(calendarEvents.userId, userId),
         eq(calendarEvents.isShift, true),
+        eq(calendarEvents.kind, 'fixed'),
         gte(calendarEvents.endAt, dayStart),
         lte(calendarEvents.endAt, dayEnd),
       ),

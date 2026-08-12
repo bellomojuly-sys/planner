@@ -1,3 +1,5 @@
+import { TZDate } from '@date-fns/tz';
+
 const LOCALE = 'it-IT';
 const TZ = 'Europe/Rome';
 
@@ -47,17 +49,25 @@ export function minutesOfDay(ts: number): number {
 }
 
 export function startOfDay(ts: number): number {
-  // Subtracting the local offset rather than using setHours keeps this correct
-  // across the DST boundary, where a day is not 24 hours long.
-  return ts - minutesOfDay(ts) * 60_000 - (new Date(ts).getSeconds() * 1000);
+  const local = new TZDate(ts, TZ);
+  local.setHours(0, 0, 0, 0);
+  return local.getTime();
 }
 
 export function addDays(ts: number, days: number): number {
-  return startOfDay(ts) + days * 86_400_000;
+  const local = new TZDate(startOfDay(ts), TZ);
+  local.setDate(local.getDate() + days);
+  return local.getTime();
 }
 
 export function sameDay(a: number, b: number): boolean {
   return startOfDay(a) === startOfDay(b);
+}
+
+export function overlapsDay(start: number, end: number, day: number): boolean {
+  const from = startOfDay(day);
+  const to = addDays(from, 1);
+  return start < to && end > from;
 }
 
 export const AREA_LABELS: Record<string, string> = {
@@ -65,6 +75,7 @@ export const AREA_LABELS: Record<string, string> = {
   mg: 'MG Integration',
   university: 'Università',
   heemia: 'Heemia',
+  career: 'Carriera / ICT',
   personal: 'Personale',
   health: 'Salute',
   errand: 'Commissioni',

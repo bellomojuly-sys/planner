@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { users, jobRuns, settings as settingsTable } from '../db/schema';
-import { syncNotion, syncCalendar } from '../services/sync';
+import { syncNotion, syncCalendars } from '../services/sync';
 import { drainOutbox } from '../services/outbox';
 import { replan } from '../services/planner';
 import { runMorningBriefing, runEveningReview, resolveReviewTime } from './daily';
@@ -40,7 +40,7 @@ export async function handleScheduled(env: Env): Promise<void> {
       // 2. Pull remote changes.
       const [notionReport, calendarReport] = await Promise.all([
         syncNotion(env, db, user.id),
-        syncCalendar(env, db, user.id),
+        syncCalendars(env, db, user.id),
       ]);
 
       const errors = [...notionReport.errors, ...calendarReport.errors];

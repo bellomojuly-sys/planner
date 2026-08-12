@@ -65,12 +65,11 @@ saranno più leggibili.
 ### 2. Database e cache
 
 ```bash
-npx wrangler d1 create planner-db
+npx wrangler d1 create giulia-personal-planner-db --location weur
 npx wrangler kv namespace create CACHE
 ```
 
-Incolla i due id in `wrangler.toml` al posto dei segnaposto, poi applica lo
-schema:
+Incolla i due id in `wrangler.toml`, poi applica lo schema:
 
 ```bash
 npm run db:migrate:local     # per lo sviluppo
@@ -123,8 +122,8 @@ saltate vengono contate nel report di sincronizzazione.
 "in un'unica sessione, non divisibile". Non impostano il blocco manuale: quello
 si ottiene trascinando il blocco nell'app.
 
-> `Carriera / ICT` non ha ancora un'area dedicata nel planner e finisce sotto
-> *Generale*. Posso aggiungerla come area a sé se ti serve.
+`Carriera / ICT` è un'area dedicata del planner, con colore, filtro e
+riconoscimento semantico propri.
 
 ### 4. Google Calendar
 
@@ -137,6 +136,23 @@ GOOGLE_CLIENT_ID=… GOOGLE_CLIENT_SECRET=… node scripts/google-auth.mjs
 ```
 
 Si apre il browser una volta sola; lo script stampa il refresh token.
+
+Dopo aver salvato le credenziali, apri **Impostazioni → Calendari Google** e
+premi **Rileva o aggiorna calendari**. Il calendario principale scrivibile
+diventa la destinazione dei blocchi creati dal planner; gli altri partono come
+**Impegno fisso**, così turni `eitje`, lezioni, esami e appuntamenti vengono
+letti anche quando non sono nel calendario `primary`. Ogni sorgente può poi
+essere impostata come:
+
+- **Impegno fisso** — sottrae tempo disponibile;
+- **Solo contesto** — compare nel planner e nei briefing, ma non blocca slot;
+- **Ignora** — non viene sincronizzata;
+- **Destinazione planner** — riceve i blocchi generati (una sola, e deve essere
+  scrivibile).
+
+Gli eventi marcati *Disponibile* in Google e i promemoria per l'intera giornata
+restano contestuali: un viaggio o una scadenza all-day non cancellano da soli
+l'intera giornata di pianificazione.
 
 ### 5. Secret
 
@@ -268,8 +284,9 @@ che evita i doppioni.
 - **Cifratura a riposo** (AES-256-GCM) per credenziali di terze parti, chiavi
   delle notifiche push e **testo grezzo di ogni nota vocale**. Un dump del
   database non rivela nulla di tutto ciò.
-- **PIN** con PBKDF2-SHA256 (210.000 iterazioni) e blocco progressivo dopo 5
-  tentativi: 1 min, 2, 4… fino a un'ora.
+- **PIN** con HMAC-SHA256, sale individuale e chiave server-side separata dal
+  database; blocco progressivo dopo 5 tentativi: 1 min, 2, 4… fino a un'ora.
+  Le righe PBKDF2 create da versioni precedenti restano verificabili.
 - **Sessioni** in cookie `HttpOnly` `Secure` `SameSite=Lax`; nel database c'è
   solo l'hash SHA-256, quindi una fuga di dati non produce sessioni valide.
 - **Token separati per il tasto Azione**, con permesso di sola cattura.

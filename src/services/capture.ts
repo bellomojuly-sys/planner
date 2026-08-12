@@ -13,6 +13,7 @@ import {
 import { interpretUtterance, type Intent } from '../integrations/claude';
 import { applyLearning, recordCompletion } from '../scheduler/estimate';
 import { replan, type RescheduleTrigger } from './planner';
+import { getPlannerCalendarId } from './calendar-sources';
 import { seal } from '../crypto/encryption';
 import { DAY_MS, formatDayLong, localDateKey, minutesBetween } from '../lib/time';
 import { PlannerError, toPlannerError } from '../lib/errors';
@@ -323,13 +324,14 @@ async function completeTask(
     .select()
     .from(scheduledBlocks)
     .where(eq(scheduledBlocks.taskId, task.id));
+  const plannerCalendarId = await getPlannerCalendarId(db, userId);
 
   for (const block of blocks) {
     if (block.googleEventId) {
       await db.insert(outbox).values({
         userId,
         kind: 'google_delete',
-        payload: { eventId: block.googleEventId, calendarId: 'primary' },
+        payload: { eventId: block.googleEventId, calendarId: plannerCalendarId },
       });
     }
   }

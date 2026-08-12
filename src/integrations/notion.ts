@@ -566,9 +566,8 @@ export function normalizeArea(raw: string | null, fallback: Area): Area {
   if (/\bmg\b|integration/.test(s)) return 'mg';
   if (/univ|esame|exam|studio|corso|lezione/.test(s)) return 'university';
   if (/salut|health|palestra|medic|benessere/.test(s)) return 'health';
+  if (/carrier|career|\bict\b|professional/.test(s)) return 'career';
   if (/spesa|commission|errand/.test(s)) return 'errand';
   if (/person/.test(s)) return 'personal';
-  // "Carriera / ICT" lands here. It has no dedicated planner area yet, so it
-  // is filed under general rather than being dropped.
   return fallback;
 }

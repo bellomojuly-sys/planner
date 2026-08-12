@@ -1,6 +1,6 @@
-name = "planner"
+name = "giulia-personal-planner"
 main = "src/index.ts"
-compatibility_date = "2025-09-01"
+compatibility_date = "2026-08-11"
 compatibility_flags = ["nodejs_compat"]
 
 # The built PWA is served straight from the Worker. No second host, no CORS.
@@ -8,20 +8,23 @@ compatibility_flags = ["nodejs_compat"]
 directory = "web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+# API requests must reach Hono before the SPA fallback. Without this rule,
+# Cloudflare Static Assets returns index.html for /api/* and the browser sees a
+# JSON parsing error during setup instead of the Worker's response.
+run_worker_first = ["/api/*"]
 
-# The placeholder ids below work for `npm run dev` (local emulation ignores
-# them). Replace both with the real ids from `wrangler d1 create planner-db`
-# and `wrangler kv namespace create CACHE` before deploying.
+# Dedicated production resources. Local development still uses isolated
+# Miniflare state unless a binding is explicitly marked remote.
 [[d1_databases]]
 binding = "DB"
-database_name = "planner-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_name = "giulia-personal-planner-db"
+database_id = "a62e0638-9fb6-4039-a4d9-ae3c4d86d8c9"
 migrations_dir = "migrations"
 
 # Short-lived cache: Google/Notion payloads, dedupe keys for cron jobs.
 [[kv_namespaces]]
 binding = "CACHE"
-id = "0000000000000000000000000000000a"
+id = "6ef602fab3294c6caea22cb18f486ebe"
 
 # Runs every 5 minutes. The handler resolves what is actually due in
 # Europe/Rome local time, so DST and the variable "30 min after the shift

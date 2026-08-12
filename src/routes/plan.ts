@@ -6,6 +6,7 @@ import { requireAuth } from '../auth/middleware';
 import {
   scheduledBlocks,
   calendarEvents,
+  calendarSources,
   tasks,
   taskDependencies,
   scheduleRuns,
@@ -13,7 +14,7 @@ import {
 import { replan, moveBlock, unpinBlock } from '../services/planner';
 import { drainOutbox } from '../services/outbox';
 import { recordCompletion } from '../scheduler/estimate';
-import { loadAgenda } from '../jobs/daily';
+import { loadAgenda, renderVoiceAgenda } from '../jobs/daily';
 import { DAY_MS, startOfLocalDay, addLocalDays } from '../lib/time';
 import { PlannerError } from '../lib/errors';
 
@@ -40,7 +41,7 @@ planRoutes.get('/', async (c) => {
   const from = startOfLocalDay(query.from ?? Date.now(), tz);
   const to = addLocalDays(from, tz, query.days);
 
-  const [blocks, events, lastRun] = await Promise.all([
+  const [blocks, events, sources, lastRun] = await Promise.all([
     db
       .select()
       .from(scheduledBlocks)
@@ -63,6 +64,10 @@ planRoutes.get('/', async (c) => {
       ),
     db
       .select()
+      .from(calendarSources)
+      .where(eq(calendarSources.userId, userId)),
+    db
+      .select()
       .from(scheduleRuns)
       .where(eq(scheduleRuns.userId, userId))
       .orderBy(desc(scheduleRuns.startedAt))
@@ -75,6 +80,7 @@ planRoutes.get('/', async (c) => {
       ? await db.select().from(tasks).where(eq(tasks.userId, userId))
       : [];
   const tasksById = new Map(taskRows.map((t) => [t.id, t]));
+  const sourcesByCalendarId = new Map(sources.map((source) => [source.calendarId, source]));
 
   return c.json({
     range: { from, to, timezone: tz },
@@ -100,16 +106,22 @@ planRoutes.get('/', async (c) => {
       .sort((a, b) => a.start - b.start),
     events: events
       .filter((e) => !e.cancelled)
-      .map((e) => ({
-        id: e.id,
-        title: e.title,
-        start: e.startAt,
-        end: e.endAt,
-        allDay: e.allDay,
-        kind: e.kind,
-        isShift: e.isShift,
-        location: e.location,
-      }))
+      .map((e) => {
+        const source = sourcesByCalendarId.get(e.calendarId);
+        return {
+          id: e.id,
+          title: e.title,
+          start: e.startAt,
+          end: e.endAt,
+          allDay: e.allDay,
+          kind: e.kind,
+          isShift: e.isShift,
+          location: e.location,
+          calendarId: e.calendarId,
+          calendarName: source?.summary ?? e.calendarId,
+          color: source?.color ?? '#9aa3b8',
+        };
+      })
       .sort((a, b) => a.start - b.start),
     lastRun: lastRun[0]
       ? {
@@ -131,6 +143,21 @@ planRoutes.get('/today', async (c) => {
     Date.now(),
   );
   return c.json(agenda);
+});
+
+/**
+ * Plain text on purpose: an iPhone Shortcut can pass the response straight to
+ * “Speak Text”, so asking Siri “Cosa devo fare oggi?” produces only today's
+ * remaining agenda and no app-specific metadata.
+ */
+planRoutes.get('/today/voice', async (c) => {
+  const agenda = await loadAgenda(
+    c.get('db'),
+    c.get('auth').userId,
+    c.env.APP_TIMEZONE,
+    Date.now(),
+  );
+  return c.text(renderVoiceAgenda(agenda, c.env.APP_TIMEZONE));
 });
 
 planRoutes.post('/replan', requireAuth('full'), async (c) => {

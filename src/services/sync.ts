@@ -5,6 +5,7 @@ import {
   taskSources,
   taskDependencies,
   calendarEvents,
+  calendarSources,
   calendarSyncState,
   settings as settingsTable,
 } from '../db/schema';
@@ -19,6 +20,7 @@ import { inferPhaseEdges, parsePhase } from '../scheduler/dependencies';
 import { DAY_MS } from '../lib/time';
 import { PlannerError, toPlannerError } from '../lib/errors';
 import type { Env } from '../env';
+import type { CalendarRole } from './calendar-sources';
 
 export interface SyncReport {
   tasksUpserted: number;
@@ -32,6 +34,28 @@ export interface SyncReport {
   errors: string[];
 }
 
+function emptyReport(): SyncReport {
+  return {
+    tasksUpserted: 0,
+    tasksCompleted: 0,
+    eventsUpserted: 0,
+    eventsRemoved: 0,
+    tasksSkipped: 0,
+    changed: false,
+    errors: [],
+  };
+}
+
+function mergeReport(target: SyncReport, source: SyncReport): void {
+  target.tasksUpserted += source.tasksUpserted;
+  target.tasksCompleted += source.tasksCompleted;
+  target.eventsUpserted += source.eventsUpserted;
+  target.eventsRemoved += source.eventsRemoved;
+  target.tasksSkipped += source.tasksSkipped;
+  target.changed ||= source.changed;
+  target.errors.push(...source.errors);
+}
+
 // ---------------------------------------------------------------------------
 // Notion → local
 // ---------------------------------------------------------------------------
@@ -41,15 +65,7 @@ export async function syncNotion(
   db: DB,
   userId: string,
 ): Promise<SyncReport> {
-  const report: SyncReport = {
-    tasksUpserted: 0,
-    tasksCompleted: 0,
-    eventsUpserted: 0,
-    eventsRemoved: 0,
-    tasksSkipped: 0,
-    changed: false,
-    errors: [],
-  };
+  const report = emptyReport();
 
   if (!env.NOTION_TOKEN) {
     report.errors.push('Notion non configurato.');
@@ -273,16 +289,10 @@ export async function syncCalendar(
   db: DB,
   userId: string,
   calendarId = 'primary',
+  role: Exclude<CalendarRole, 'ignore'> = 'planner',
+  calendarSummary = '',
 ): Promise<SyncReport> {
-  const report: SyncReport = {
-    tasksUpserted: 0,
-    tasksCompleted: 0,
-    eventsUpserted: 0,
-    eventsRemoved: 0,
-    tasksSkipped: 0,
-    changed: false,
-    errors: [],
-  };
+  const report = emptyReport();
 
   const prefs = await db.query.settings.findFirst({
     where: eq(settingsTable.userId, userId),
@@ -353,8 +363,21 @@ export async function syncCalendar(
       continue;
     }
 
-    const { kind, isShift } = classifyEvent(event, keywords);
-    const contentHash = `${event.startAt}:${event.endAt}:${event.title}`;
+    const { kind, isShift } = classifyEvent(
+      event,
+      keywords,
+      role,
+      calendarSummary,
+    );
+    const contentHash = [
+      event.startAt,
+      event.endAt,
+      event.title,
+      event.location,
+      event.allDay,
+      event.transparent,
+      role,
+    ].join(':');
 
     const existing = await db.query.calendarEvents.findFirst({
       where: and(
@@ -410,16 +433,56 @@ export async function syncCalendar(
  * All-day events are treated as soft: an all-day "Ferie" should not blank out
  * the whole day for planning purposes, whereas a timed shift must.
  */
-function classifyEvent(
+export function classifyEvent(
   event: GoogleEvent,
   keywords: string[],
+  role: Exclude<CalendarRole, 'ignore'>,
+  calendarSummary = '',
 ): { kind: 'fixed' | 'soft'; isShift: boolean } {
   const haystack = `${event.title} ${event.location ?? ''}`.toLowerCase();
-  const matched = keywords.some((k) => haystack.includes(k));
-  const isShift = /turno|ristorante|shift|servizio/.test(haystack);
+  const shiftHaystack = `${haystack} ${calendarSummary}`.toLowerCase();
+  const isShift = /turno|ristorante|shift|servizio|eitje/.test(shiftHaystack);
 
-  if (event.allDay) return { kind: 'soft', isShift: false };
-  return { kind: matched ? 'fixed' : 'fixed', isShift };
+  // An explicit Google "free" event and an all-day marker are useful context
+  // but must not erase an entire planning day. A context calendar is likewise
+  // visible without contributing to the busy mask.
+  if (role === 'context' || event.transparent || event.allDay) {
+    return { kind: 'soft', isShift };
+  }
+  return { kind: 'fixed', isShift };
+}
+
+/** Sync every configured calendar and return one report to the caller. */
+export async function syncCalendars(
+  env: Env,
+  db: DB,
+  userId: string,
+): Promise<SyncReport> {
+  const report = emptyReport();
+  const configured = await db
+    .select()
+    .from(calendarSources)
+    .where(eq(calendarSources.userId, userId));
+
+  // Existing installations keep working before the first discovery pass.
+  if (configured.length === 0) {
+    return syncCalendar(env, db, userId, 'primary', 'planner');
+  }
+
+  for (const source of configured) {
+    if (!source.enabled || source.role === 'ignore') continue;
+    const one = await syncCalendar(
+      env,
+      db,
+      userId,
+      source.calendarId,
+      source.role,
+      source.summary,
+    );
+    mergeReport(report, one);
+  }
+
+  return report;
 }
 
 async function upsertSyncState(
@@ -440,25 +503,31 @@ async function upsertSyncState(
     )
     .limit(1);
 
-  if (existing.length > 0) {
-    await db
-      .update(calendarSyncState)
-      .set({ syncToken, lastSyncedAt: Date.now(), lastError: error?.slice(0, 500) })
-      .where(
-        and(
-          eq(calendarSyncState.userId, userId),
-          eq(calendarSyncState.calendarId, calendarId),
-        ),
-      );
-  } else {
-    await db.insert(calendarSyncState).values({
-      userId,
-      calendarId,
-      syncToken,
-      lastSyncedAt: Date.now(),
-      lastError: error?.slice(0, 500),
+  const values = {
+    userId,
+    calendarId,
+    syncToken,
+    lastSyncedAt: Date.now(),
+    lastError: error?.slice(0, 500),
+  };
+
+  if (existing.length === 0) {
+    await db.insert(calendarSyncState).values(values).onConflictDoUpdate({
+      target: [calendarSyncState.userId, calendarSyncState.calendarId],
+      set: values,
     });
+    return;
   }
+
+  await db
+    .update(calendarSyncState)
+    .set(values)
+    .where(
+      and(
+        eq(calendarSyncState.userId, userId),
+        eq(calendarSyncState.calendarId, calendarId),
+      ),
+    );
 }
 
 /** Fixed commitments inside the planning window, for the busy mask. */

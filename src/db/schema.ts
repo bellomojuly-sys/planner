@@ -46,7 +46,8 @@ export const users = sqliteTable(
     email: text('email').notNull(),
     displayName: text('display_name').notNull(),
 
-    // PBKDF2-SHA256. Never the PIN itself, and never reversible.
+    // HMAC-SHA256 with a server-side pepper for new rows. Positive iteration
+    // counts identify legacy PBKDF2 hashes; 0 identifies HMAC v1.
     pinHash: text('pin_hash'),
     pinSalt: text('pin_salt'),
     pinIterations: integer('pin_iterations').notNull().default(210_000),
@@ -290,6 +291,7 @@ export const AREAS = [
   'mg',
   'university',
   'heemia',
+  'career',
   'personal',
   'health',
   'errand',
@@ -486,17 +488,63 @@ export const calendarEvents = sqliteTable(
   ],
 );
 
-export const calendarSyncState = sqliteTable('calendar_sync_state', {
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  calendarId: text('calendar_id').notNull(),
-  /** Google incremental sync token. Cheap polling instead of full refetch. */
-  syncToken: text('sync_token'),
-  lastSyncedAt: integer('last_synced_at'),
-  lastError: text('last_error'),
-  updatedAt: updatedAt(),
-});
+/**
+ * Which Google calendars to read, and what each one means.
+ *
+ * Reading only `primary` is not enough: shifts arrive from a rota app on their
+ * own imported calendar, lessons sit on a university calendar, and the gym has
+ * its own. Those are exactly the fixed commitments the plan must be built
+ * around, so each calendar carries an explicit role instead of being guessed
+ * at by name.
+ */
+export const calendarSources = sqliteTable(
+  'calendar_sources',
+  {
+    id: id(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    calendarId: text('calendar_id').notNull(),
+    summary: text('summary').notNull(),
+    /**
+     * `busy`    — its events are immovable; the scheduler works around them.
+     * `context` — shown in the app and the briefing, but does not block time.
+     * `ignore`  — not read at all.
+     * `planner` — where our own task blocks are written. Exactly one.
+     */
+    role: text('role', { enum: ['busy', 'context', 'ignore', 'planner'] })
+      .notNull()
+      .default('ignore'),
+    /** Colour used for this calendar's events in the day grid. */
+    color: text('color').notNull().default('#9aa3b8'),
+    accessRole: text('access_role', {
+      enum: ['freeBusyReader', 'reader', 'writer', 'owner'],
+    })
+      .notNull()
+      .default('reader'),
+    primary: integer('primary', { mode: 'boolean' }).notNull().default(false),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('calendar_sources_idx').on(t.userId, t.calendarId)],
+);
+
+export const calendarSyncState = sqliteTable(
+  'calendar_sync_state',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    calendarId: text('calendar_id').notNull(),
+    /** Google incremental sync token. Cheap polling instead of full refetch. */
+    syncToken: text('sync_token'),
+    lastSyncedAt: integer('last_synced_at'),
+    lastError: text('last_error'),
+    updatedAt: updatedAt(),
+  },
+  (t) => [uniqueIndex('calendar_sync_state_idx').on(t.userId, t.calendarId)],
+);
 
 // ---------------------------------------------------------------------------
 // Shopping
@@ -757,6 +805,7 @@ export type Task = typeof tasks.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
 export type ScheduledBlock = typeof scheduledBlocks.$inferSelect;
 export type CalendarEvent = typeof calendarEvents.$inferSelect;
+export type CalendarSource = typeof calendarSources.$inferSelect;
 export type ShoppingItem = typeof shoppingItems.$inferSelect;
 export type TaskSource = typeof taskSources.$inferSelect;
 export type TaskDependency = typeof taskDependencies.$inferSelect;
@@ -772,6 +821,7 @@ export const schema = {
   taskDependencies,
   scheduledBlocks,
   calendarEvents,
+  calendarSources,
   calendarSyncState,
   shoppingItems,
   captures,

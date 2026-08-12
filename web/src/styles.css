@@ -1,39 +1,41 @@
 /*
  * A planner is read in glances — at 07:00, between shifts, walking to the gym.
- * The visual system optimises for that: one accent colour reserved for "now",
- * area identity carried by a thin left rule rather than fills, and type sized
- * so the next block is legible at arm's length.
+ * The visual system optimises for that: a blush-to-raspberry palette that still
+ * reads at arm's length, area identity carried by a thin left rule, and the
+ * strongest pink reserved for actions and the current-time line.
  */
 
 :root {
-  --paper: #12141a;
-  --paper-raised: #191c24;
-  --paper-sunken: #0d0f14;
-  --ink: #eceef3;
-  --ink-soft: #a4abbb;
-  --ink-faint: #6b7385;
-  --rule: #262b36;
-  --rule-soft: #1e222b;
+  --paper: #fff5f8;
+  --paper-raised: #fffbfc;
+  --paper-sunken: #fbe8ef;
+  --ink: #3a1f2b;
+  --ink-soft: #704658;
+  --ink-faint: #987083;
+  --rule: #ebbed0;
+  --rule-soft: #f4d9e3;
 
-  --accent: #ffb454;
-  --accent-ink: #241a08;
+  --accent: #d6296f;
+  --accent-ink: #fff8fb;
 
-  --area-general: #7c8cf8;
-  --area-mg: #4bb8a9;
-  --area-university: #d98cf0;
-  --area-heemia: #f0a35e;
-  --area-personal: #8fbf6f;
-  --area-health: #f07f7f;
-  --area-errand: #9aa3b8;
+  --area-general: #cf4f85;
+  --area-mg: #a94d79;
+  --area-university: #a45bbd;
+  --area-heemia: #df617e;
+  --area-personal: #d76ca3;
+  --area-health: #c53262;
+  --area-career: #8e5aa5;
+  --area-errand: #9e7185;
 
-  --danger: #f0736b;
-  --ok: #6fcf97;
+  --danger: #bd294f;
+  --ok: #3f8268;
 
   --radius: 10px;
   --radius-lg: 16px;
-  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.25);
+  --shadow: 0 1px 2px rgb(91 31 57 / 0.08), 0 10px 30px rgb(135 45 83 / 0.1);
 
   --font: ui-sans-serif, -apple-system, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Palatino, Georgia, serif;
   --font-num: ui-monospace, 'SF Mono', 'JetBrains Mono', monospace;
 
   /* Vertical scale of the day grid. */
@@ -43,19 +45,21 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-@media (prefers-color-scheme: light) {
+@media (prefers-color-scheme: dark) {
   :root {
-    --paper: #faf9f7;
-    --paper-raised: #ffffff;
-    --paper-sunken: #f0eeea;
-    --ink: #1a1c22;
-    --ink-soft: #545a68;
-    --ink-faint: #8a92a3;
-    --rule: #e2dfd9;
-    --rule-soft: #edeae5;
-    --accent: #c77b1e;
-    --accent-ink: #fff8ec;
-    --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px rgb(0 0 0 / 0.06);
+    --paper: #24131b;
+    --paper-raised: #321b26;
+    --paper-sunken: #1c0f15;
+    --ink: #fff0f5;
+    --ink-soft: #dfb8c8;
+    --ink-faint: #ad7d91;
+    --rule: #593047;
+    --rule-soft: #432336;
+    --accent: #ff73aa;
+    --accent-ink: #2d101d;
+    --danger: #ff7187;
+    --ok: #78c9a7;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.35), 0 10px 30px rgb(0 0 0 / 0.25);
   }
 }
 
@@ -71,7 +75,9 @@ body,
 }
 
 body {
-  background: var(--paper);
+  background:
+    radial-gradient(circle at 88% -12%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 38%),
+    var(--paper);
   color: var(--ink);
   font-family: var(--font);
   font-size: 15px;
@@ -95,6 +101,11 @@ button {
   background: none;
 }
 
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 2px;
+}
+
 /* --------------------------------------------------------------------- */
 /* Layout                                                                 */
 /* --------------------------------------------------------------------- */
@@ -112,8 +123,8 @@ button {
   top: 0;
   z-index: 20;
   padding: calc(var(--safe-top) + 12px) 16px 12px;
-  background: color-mix(in srgb, var(--paper) 88%, transparent);
-  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--paper) 86%, transparent);
+  backdrop-filter: blur(18px) saturate(135%);
   border-bottom: 1px solid var(--rule-soft);
 }
 
@@ -126,9 +137,10 @@ button {
 
 .topbar h1 {
   margin: 0;
-  font-size: 20px;
-  font-weight: 620;
-  letter-spacing: -0.01em;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 
 .topbar__meta {
@@ -152,8 +164,8 @@ button {
   display: flex;
   justify-content: space-around;
   padding: 8px 8px calc(var(--safe-bottom) + 8px);
-  background: color-mix(in srgb, var(--paper) 92%, transparent);
-  backdrop-filter: blur(16px);
+  background: color-mix(in srgb, var(--paper-raised) 90%, transparent);
+  backdrop-filter: blur(18px) saturate(135%);
   border-top: 1px solid var(--rule-soft);
 }
 
@@ -172,6 +184,7 @@ button {
 
 .tabbar button[aria-current='page'] {
   color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
 .tabbar .tabbar__icon {
@@ -210,7 +223,8 @@ button {
 
 .daystrip button[aria-pressed='true'] {
   border-color: var(--accent);
-  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 11%, var(--paper-raised));
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -218,6 +232,41 @@ button {
   position: relative;
   margin-top: 12px;
   padding-left: 52px;
+}
+
+.all-day-events {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px 48px;
+}
+
+.all-day-event {
+  display: grid;
+  grid-template-columns: 7px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px dashed var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-sunken);
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.all-day-event > span {
+  width: 7px;
+  height: 22px;
+  border-radius: 999px;
+}
+
+.all-day-event strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.all-day-event small {
+  color: var(--ink-faint);
 }
 
 .grid__hour {
@@ -239,8 +288,7 @@ button {
   color: var(--ink-faint);
 }
 
-/* The only element allowed to use the accent colour: it must be findable
-   instantly when the screen is glanced at. */
+/* The strongest timeline signal: it must be findable instantly at a glance. */
 .grid__now {
   position: absolute;
   left: 46px;
@@ -293,6 +341,14 @@ button {
   touch-action: auto;
 }
 
+.block[data-kind='soft'] {
+  background: color-mix(in srgb, var(--paper-sunken) 72%, transparent);
+  border-style: dashed;
+  color: var(--ink-faint);
+  opacity: 0.82;
+  touch-action: auto;
+}
+
 .block[data-kind='gym'] {
   border-left-color: var(--area-health);
 }
@@ -302,6 +358,7 @@ button {
 .block[data-area='heemia'] { border-left-color: var(--area-heemia); }
 .block[data-area='personal'] { border-left-color: var(--area-personal); }
 .block[data-area='health'] { border-left-color: var(--area-health); }
+.block[data-area='career'] { border-left-color: var(--area-career); }
 .block[data-area='errand'] { border-left-color: var(--area-errand); }
 
 .block__title {
@@ -385,6 +442,27 @@ button {
   margin-top: 2px;
   font-size: 12px;
   color: var(--ink-faint);
+}
+
+.calendar-sources li {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.calendar-source__color {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 32px;
+  border-radius: 999px;
+}
+
+.calendar-source__role {
+  max-width: 190px;
+  padding: 7px 9px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-sunken);
+  font-size: 12px;
 }
 
 .check {
@@ -495,8 +573,10 @@ button {
 
 .lock h1 {
   margin: 0;
-  font-size: 22px;
-  font-weight: 620;
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
 }
 
 .lock p {
@@ -625,4 +705,77 @@ code {
   border-radius: 5px;
   background: var(--paper-sunken);
   word-break: break-all;
+}
+
+/* --------------------------------------------------------------------- */
+/* Siri setup                                                             */
+/* --------------------------------------------------------------------- */
+
+.voice-card {
+  position: relative;
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--rule-soft));
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--accent) 10%, var(--paper-raised)), var(--paper-raised) 58%);
+}
+
+.voice-card__mark {
+  position: absolute;
+  top: -20px;
+  right: 8px;
+  color: color-mix(in srgb, var(--accent) 13%, transparent);
+  font-family: var(--font-display);
+  font-size: 92px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.22em;
+  transform: rotate(-7deg);
+  pointer-events: none;
+}
+
+.voice-card > *:not(.voice-card__mark) {
+  position: relative;
+}
+
+.voice-setup code {
+  display: block;
+  margin: 7px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--rule-soft);
+}
+
+.voice-setup .banner code {
+  background: color-mix(in srgb, var(--paper-raised) 82%, transparent);
+}
+
+.voice-steps {
+  margin: 16px 0 0;
+  padding-left: 24px;
+  color: var(--ink-soft);
+}
+
+.voice-steps li {
+  margin: 0 0 12px;
+  padding-left: 4px;
+}
+
+.voice-steps li::marker {
+  color: var(--accent);
+  font-family: var(--font-num);
+  font-weight: 700;
+}
+
+.voice-card__ready {
+  margin: 14px 0 2px;
+  color: var(--ink);
+  font-weight: 650;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }

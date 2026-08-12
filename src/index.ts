@@ -77,7 +77,11 @@ app.notFound((c) => {
   }
   // Everything else falls through to the static asset handler configured in
   // wrangler.toml, which serves the PWA shell for client-side routes.
-  return c.env.ASSETS.fetch(c.req.raw);
+  // Asset responses can carry immutable headers. Clone them before the
+  // secure-headers middleware appends CSP and the other response headers.
+  return c.env.ASSETS.fetch(c.req.raw).then(
+    (response) => new Response(response.body, response),
+  );
 });
 
 export default {

@@ -12,10 +12,14 @@ import {
   AREAS,
 } from '../db/schema';
 import * as notion from '../integrations/notion';
-import { listCalendars } from '../integrations/google-calendar';
 import { sealJson } from '../crypto/encryption';
 import { replan } from '../services/planner';
-import { syncNotion, syncCalendar } from '../services/sync';
+import { syncNotion, syncCalendars } from '../services/sync';
+import {
+  discoverCalendarSources,
+  loadCalendarSources,
+  updateCalendarSource,
+} from '../services/calendar-sources';
 import { drainOutbox } from '../services/outbox';
 import { estimateAccuracy } from '../scheduler/estimate';
 import { requireSecret } from '../env';
@@ -34,16 +38,16 @@ settingsRoutes.get('/', async (c) => {
   });
   if (!prefs) [prefs] = await db.insert(settingsTable).values({ userId }).returning();
 
-  const sources = await db
-    .select()
-    .from(taskSources)
-    .where(eq(taskSources.userId, userId));
-
-  const accuracy = await estimateAccuracy(db, userId);
+  const [sources, calendars, accuracy] = await Promise.all([
+    db.select().from(taskSources).where(eq(taskSources.userId, userId)),
+    loadCalendarSources(db, userId),
+    estimateAccuracy(db, userId),
+  ]);
 
   return c.json({
     settings: prefs,
     sources,
+    calendars,
     accuracy,
     integrations: {
       notion: Boolean(c.env.NOTION_TOKEN),
@@ -200,7 +204,52 @@ settingsRoutes.delete('/sources/:id', requireAuth('full'), async (c) => {
 // ---------------------------------------------------------------------------
 
 settingsRoutes.get('/google/calendars', requireAuth('full'), async (c) => {
-  return c.json({ calendars: await listCalendars(c.env) });
+  const calendars = await loadCalendarSources(
+    c.get('db'),
+    c.get('auth').userId,
+  );
+  return c.json({ calendars });
+});
+
+settingsRoutes.post('/google/calendars/discover', requireAuth('full'), async (c) => {
+  const calendars = await discoverCalendarSources(
+    c.env,
+    c.get('db'),
+    c.get('auth').userId,
+  );
+  return c.json({ ok: true, calendars });
+});
+
+settingsRoutes.patch('/google/calendars/:id', requireAuth('full'), async (c) => {
+  const body = z
+    .object({
+      role: z.enum(['busy', 'context', 'ignore', 'planner']).optional(),
+      enabled: z.boolean().optional(),
+      color: z.string().regex(/^#[0-9a-f]{6}$/i).optional(),
+    })
+    .refine((value) => Object.keys(value).length > 0)
+    .parse(await c.req.json());
+
+  const db = c.get('db');
+  const { userId } = c.get('auth');
+  const calendar = await updateCalendarSource(
+    db,
+    userId,
+    c.req.param('id'),
+    body,
+  );
+
+  let sync = null;
+  let diff = null;
+  if ((body.role !== undefined || body.enabled !== undefined) && c.env.GOOGLE_REFRESH_TOKEN) {
+    sync = await syncCalendars(c.env, db, userId);
+    if (sync.errors.length === 0) {
+      diff = await replan(c.env, db, userId, 'calendar_change');
+    }
+  }
+
+  await drainOutbox(c.env, db);
+  return c.json({ ok: true, calendar, sync, diff });
 });
 
 settingsRoutes.post('/sync', requireAuth('full'), async (c) => {
@@ -209,7 +258,7 @@ settingsRoutes.post('/sync', requireAuth('full'), async (c) => {
 
   const [notionReport, calendarReport] = await Promise.all([
     syncNotion(c.env, db, userId),
-    syncCalendar(c.env, db, userId),
+    syncCalendars(c.env, db, userId),
   ]);
 
   const diff =

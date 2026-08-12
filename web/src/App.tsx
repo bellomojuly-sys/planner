@@ -6,7 +6,14 @@ import { CaptureBar } from './components/CaptureBar';
 import { Shopping } from './components/Shopping';
 import { Tasks } from './components/Tasks';
 import { Settings } from './components/Settings';
-import { addDays, dayLong, dayShort, sameDay, startOfDay } from './lib/format';
+import {
+  addDays,
+  dayLong,
+  dayShort,
+  overlapsDay,
+  sameDay,
+  startOfDay,
+} from './lib/format';
 
 type View = 'day' | 'tasks' | 'shopping' | 'settings';
 type AuthState = 'loading' | 'setup' | 'locked' | 'unlocked';
@@ -126,7 +133,12 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
   }, [notice]);
 
   const dayBlocks = plan?.blocks.filter((b) => sameDay(b.start, day)) ?? [];
-  const dayEvents = plan?.events.filter((e) => sameDay(e.start, day)) ?? [];
+  const dayEvents =
+    plan?.events.filter((event) =>
+      event.allDay
+        ? overlapsDay(event.start, event.end, day)
+        : sameDay(event.start, day),
+    ) ?? [];
   const unplaced = plan?.lastRun?.summary?.unplaced ?? [];
 
   return (

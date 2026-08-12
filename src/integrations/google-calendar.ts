@@ -130,6 +130,8 @@ export interface GoogleEvent {
   startAt: number;
   endAt: number;
   allDay: boolean;
+  /** Google `transparency=transparent`: visible, but explicitly not busy. */
+  transparent: boolean;
   cancelled: boolean;
   etag: string | null;
   /** Set by us on blocks we created, so we never treat our own output as busy. */
@@ -137,20 +139,43 @@ export interface GoogleEvent {
   plannerBlockId: string | null;
 }
 
-export async function listCalendars(
-  env: Env,
-): Promise<Array<{ id: string; summary: string; primary: boolean }>> {
-  const res = await calFetch<any>(
-    env,
-    '/users/me/calendarList',
-    { method: 'GET' },
-    'google.listCalendars',
-  );
-  return (res.items ?? []).map((c: any) => ({
-    id: c.id,
-    summary: c.summary,
-    primary: c.primary === true,
-  }));
+export interface GoogleCalendar {
+  id: string;
+  summary: string;
+  primary: boolean;
+  accessRole: 'freeBusyReader' | 'reader' | 'writer' | 'owner';
+  color: string;
+}
+
+export async function listCalendars(env: Env): Promise<GoogleCalendar[]> {
+  const calendars: GoogleCalendar[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const params = new URLSearchParams({ maxResults: '250', showHidden: 'true' });
+    if (pageToken) params.set('pageToken', pageToken);
+
+    const res = await calFetch<any>(
+      env,
+      `/users/me/calendarList?${params}`,
+      { method: 'GET' },
+      'google.listCalendars',
+    );
+
+    for (const calendar of res.items ?? []) {
+      calendars.push({
+        id: calendar.id,
+        summary: calendar.summary ?? '(senza nome)',
+        primary: calendar.primary === true,
+        accessRole: calendar.accessRole ?? 'reader',
+        color: calendar.backgroundColor ?? '#9aa3b8',
+      });
+    }
+
+    pageToken = res.nextPageToken;
+  } while (pageToken);
+
+  return calendars;
 }
 
 export interface SyncResult {
@@ -221,6 +246,7 @@ function mapEvent(item: any): GoogleEvent | null {
       startAt: 0,
       endAt: 0,
       allDay: false,
+      transparent: false,
       cancelled: true,
       etag: item.etag ?? null,
       isPlannerBlock: false,
@@ -247,6 +273,7 @@ function mapEvent(item: any): GoogleEvent | null {
     startAt,
     endAt,
     allDay,
+    transparent: item.transparency === 'transparent',
     cancelled: false,
     etag: item.etag ?? null,
     isPlannerBlock: Boolean(plannerBlockId),

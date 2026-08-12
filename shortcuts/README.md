@@ -98,3 +98,31 @@ curl -X POST https://TUO-WORKER.workers.dev/api/capture/text \
 ```
 
 La risposta è una riga di testo in italiano che elenca cosa è stato fatto.
+
+---
+
+# Siri — «Cosa devo fare oggi?»
+
+Questo comando è separato dalla dettatura: non crea e non modifica nulla. Legge
+soltanto gli impegni fissi e le attività ancora da fare nella giornata corrente,
+in ordine cronologico. Non aggiunge scadenze arretrate, lista della spesa,
+domani o commenti dell’AI.
+
+## 1. Genera l’accesso in sola lettura
+
+Nell’app apri **Impostazioni** → **Siri · cosa devo fare oggi?** →
+**Prepara il comando Siri** e copia il token mostrato una sola volta.
+
+## 2. Crea il Comando Rapido
+
+Nell’app **Comandi** premi **+** e chiamalo **Cosa devo fare oggi**. Aggiungi:
+
+1. **Ottieni contenuto dell’URL**
+   - Metodo: `GET`
+   - URL: `https://giulia-personal-planner.giulia-planner.workers.dev/api/plan/today/voice`
+   - Intestazione `Authorization`: `Bearer IL_TOKEN_APPENA_COPIATO`
+2. **Pronuncia testo**
+   - Testo: risultato di **Ottieni contenuto dell’URL**
+
+Da quel momento basta dire: **«Siri, cosa devo fare oggi?»**. La risposta è
+testo semplice e funziona senza Claude: deriva direttamente dal piano salvato.

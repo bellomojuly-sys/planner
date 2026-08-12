@@ -26,26 +26,41 @@ export interface AuthContext {
   via: 'session' | 'token';
 }
 
+export async function prepareSession(
+  userId: string,
+  userAgent?: string,
+): Promise<{
+  token: string;
+  expiresAt: number;
+  values: typeof sessions.$inferInsert;
+}> {
+  const token = randomToken(32);
+  const expiresAt = Date.now() + SESSION_TTL_MS;
+  return {
+    token,
+    expiresAt,
+    values: {
+      userId,
+      tokenHash: await sha256Hex(token),
+      expiresAt,
+      lastSeenAt: Date.now(),
+      userAgent: userAgent?.slice(0, 200),
+    },
+  };
+}
+
 export async function createSession(
   db: DB,
   userId: string,
   userAgent?: string,
 ): Promise<{ token: string; expiresAt: number }> {
-  const token = randomToken(32);
-  const expiresAt = Date.now() + SESSION_TTL_MS;
-
-  await db.insert(sessions).values({
-    userId,
-    tokenHash: await sha256Hex(token),
-    expiresAt,
-    lastSeenAt: Date.now(),
-    userAgent: userAgent?.slice(0, 200),
-  });
+  const prepared = await prepareSession(userId, userAgent);
+  await db.insert(sessions).values(prepared.values);
 
   // Opportunistic cleanup; keeps the table from growing without a cron entry.
   await db.delete(sessions).where(lt(sessions.expiresAt, Date.now()));
 
-  return { token, expiresAt };
+  return { token: prepared.token, expiresAt: prepared.expiresAt };
 }
 
 export function attachSessionCookie(
@@ -139,15 +154,27 @@ export async function createApiToken(
   name: string,
   scope: 'capture' | 'read' | 'full' = 'capture',
 ): Promise<string> {
-  const token = randomToken(32);
-  await db.insert(apiTokens).values({
-    userId,
-    name,
-    scope,
-    tokenHash: await sha256Hex(token),
-  });
+  const prepared = await prepareApiToken(userId, name, scope);
+  await db.insert(apiTokens).values(prepared.values);
   // Returned exactly once — only the hash is retained.
-  return token;
+  return prepared.token;
+}
+
+export async function prepareApiToken(
+  userId: string,
+  name: string,
+  scope: 'capture' | 'read' | 'full' = 'capture',
+): Promise<{ token: string; values: typeof apiTokens.$inferInsert }> {
+  const token = randomToken(32);
+  return {
+    token,
+    values: {
+      userId,
+      name,
+      scope,
+      tokenHash: await sha256Hex(token),
+    },
+  };
 }
 
 /**

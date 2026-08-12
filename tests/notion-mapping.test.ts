@@ -157,6 +157,7 @@ describe('property mapping — Tasks (shared database)', () => {
       mg: 'MG Integration',
       personal: 'Personal',
       health: 'health',
+      career: 'Carriera / ICT',
     });
   });
 });
@@ -210,8 +211,9 @@ describe('area routing from a single database', () => {
     expect(normalizeArea('health', 'general')).toBe('health');
   });
 
-  it('files the unmapped Carriera / ICT option under the fallback', () => {
-    expect(normalizeArea('Carriera / ICT', 'general')).toBe('general');
+  it('routes Carriera / ICT to its own area', () => {
+    expect(normalizeArea('Carriera / ICT', 'general')).toBe('career');
+    expect(normalizeArea('Career development', 'general')).toBe('career');
   });
 
   it('does not let the generic integration rule swallow Heemia', () => {

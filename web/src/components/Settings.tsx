@@ -145,6 +145,20 @@ export function Settings({ onChanged }: { onChanged: () => void }) {
       </div>
 
       <div className="card">
+        <h2>Calendari Google</h2>
+        <p className="list__meta">
+          Gli impegni fissi bloccano il tempo; i calendari di contesto restano
+          visibili senza togliere spazio alle attività. Un solo calendario riceve
+          i blocchi creati dal planner.
+        </p>
+        <GoogleCalendars
+          calendars={data.calendars}
+          onReload={load}
+          onChanged={onChanged}
+        />
+      </div>
+
+      <div className="card">
         <h2>Notifiche</h2>
         <PushToggle />
       </div>
@@ -214,8 +228,97 @@ export function Settings({ onChanged }: { onChanged: () => void }) {
         )}
       </div>
 
+      <VoiceTodayToken />
       <CaptureTokens />
     </>
+  );
+}
+
+function VoiceTodayToken() {
+  const [token, setToken] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const endpoint = `${window.location.origin}/api/plan/today/voice`;
+
+  return (
+    <div className="card voice-card">
+      <div className="voice-card__mark" aria-hidden="true">))</div>
+      <h2>Siri · cosa devo fare oggi?</h2>
+      <p className="list__meta">
+        Di’ «Siri, cosa devo fare oggi». L’iPhone leggerà soltanto gli impegni
+        e le attività ancora da fare oggi, in ordine di orario.
+      </p>
+
+      {error && (
+        <div className="banner" data-tone="error" role="alert">
+          {error}
+        </div>
+      )}
+
+      {!token ? (
+        <button
+          className="btn"
+          data-variant="primary"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            setError(null);
+            try {
+              const { data } = await api.post<{ token: string }>('/auth/tokens', {
+                name: `Siri piano di oggi ${new Date().toLocaleDateString('it-IT')}`,
+                scope: 'read',
+              });
+              setToken(data.token);
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : 'Non sono riuscita a creare l’accesso Siri.');
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? 'Preparo…' : 'Prepara il comando Siri'}
+        </button>
+      ) : (
+        <div className="voice-setup">
+          <div className="banner" data-tone="warn">
+            <strong>Token da copiare una sola volta</strong>
+            <code>{token}</code>
+            <button
+              className="btn"
+              onClick={async () => {
+                await navigator.clipboard.writeText(token);
+                setCopied(true);
+              }}
+            >
+              {copied ? 'Copiato' : 'Copia token'}
+            </button>
+          </div>
+
+          <ol className="voice-steps">
+            <li>
+              Apri <strong>Comandi</strong>, premi <strong>+</strong> e chiamalo
+              <strong> Cosa devo fare oggi</strong>.
+            </li>
+            <li>
+              Aggiungi <strong>Ottieni contenuto dell’URL</strong> con metodo GET e URL
+              <code>{endpoint}</code>.
+            </li>
+            <li>
+              Nelle intestazioni aggiungi <strong>Authorization</strong> con valore
+              <code>Bearer {token}</code>.
+            </li>
+            <li>
+              Aggiungi <strong>Pronuncia testo</strong> usando il risultato del passaggio
+              precedente.
+            </li>
+          </ol>
+          <p className="voice-card__ready">
+            Fatto: da quel momento basta dire «Siri, cosa devo fare oggi?».
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -276,6 +379,7 @@ function AddSource({ onAdded }: { onAdded: () => void }) {
               <option value="mg">MG Integration</option>
               <option value="university">Università</option>
               <option value="heemia">Heemia</option>
+              <option value="career">Carriera / ICT</option>
               <option value="personal">Personale</option>
             </select>
           </label>
@@ -308,6 +412,136 @@ function AddSource({ onAdded }: { onAdded: () => void }) {
         </>
       )}
     </div>
+  );
+}
+
+const CALENDAR_ROLE_LABELS = {
+  busy: 'Impegno fisso',
+  context: 'Solo contesto',
+  ignore: 'Ignora',
+  planner: 'Destinazione planner',
+} as const;
+
+function GoogleCalendars({
+  calendars,
+  onReload,
+  onChanged,
+}: {
+  calendars: SettingsView['calendars'];
+  onReload: () => Promise<void>;
+  onChanged: () => void;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function patchCalendar(
+    id: string,
+    patch: { role?: keyof typeof CALENDAR_ROLE_LABELS; enabled?: boolean },
+  ) {
+    setBusyId(id);
+    setError(null);
+    try {
+      await api.patch(`/settings/google/calendars/${id}`, patch);
+      await onReload();
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Errore nel calendario.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <>
+      {error && (
+        <div className="banner" data-tone="error">
+          {error}
+        </div>
+      )}
+
+      {calendars.length === 0 ? (
+        <p className="list__meta">
+          Nessun calendario ancora rilevato. Il planner continuerà a usare il
+          calendario principale finché non completi questo passaggio.
+        </p>
+      ) : (
+        <ul className="list calendar-sources">
+          {calendars.map((calendar) => {
+            const writable =
+              calendar.accessRole === 'writer' || calendar.accessRole === 'owner';
+            return (
+              <li key={calendar.id}>
+                <span
+                  className="calendar-source__color"
+                  style={{ backgroundColor: calendar.color }}
+                  aria-hidden="true"
+                />
+                <div className="list__main">
+                  <div className="list__title">
+                    {calendar.summary}
+                    {calendar.primary && <span className="block__badge">principale</span>}
+                  </div>
+                  <div className="list__meta">
+                    {writable ? 'scrivibile' : 'sola lettura'}
+                    {!calendar.enabled && ' · disattivato'}
+                  </div>
+                </div>
+                <select
+                  className="calendar-source__role"
+                  aria-label={`Ruolo di ${calendar.summary}`}
+                  value={calendar.role}
+                  disabled={busyId !== null}
+                  onChange={(event) =>
+                    void patchCalendar(calendar.id, {
+                      role: event.target.value as keyof typeof CALENDAR_ROLE_LABELS,
+                    })
+                  }
+                >
+                  {Object.entries(CALENDAR_ROLE_LABELS).map(([value, label]) => (
+                    <option
+                      key={value}
+                      value={value}
+                      disabled={value === 'planner' && !writable}
+                    >
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="btn"
+                  data-variant="quiet"
+                  disabled={busyId !== null || calendar.role === 'planner'}
+                  onClick={() =>
+                    void patchCalendar(calendar.id, { enabled: !calendar.enabled })
+                  }
+                >
+                  {calendar.enabled ? 'Disattiva' : 'Attiva'}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <button
+        className="btn"
+        disabled={busyId !== null}
+        onClick={async () => {
+          setBusyId('discover');
+          setError(null);
+          try {
+            await api.post('/settings/google/calendars/discover');
+            await onReload();
+          } catch (err) {
+            setError(err instanceof ApiError ? err.message : 'Errore Google Calendar.');
+          } finally {
+            setBusyId(null);
+          }
+        }}
+      >
+        {busyId === 'discover' ? 'Cerco…' : 'Rileva o aggiorna calendari'}
+      </button>
+    </>
   );
 }
 
@@ -395,7 +629,7 @@ function CaptureTokens() {
 
   return (
     <div className="card">
-      <h2>Tasto Azione iPhone</h2>
+      <h2>Dettatura · aggiungi attività</h2>
       <p className="list__meta">
         Genera un token per il Comando Rapido. Vale solo per registrare note vocali: non può
         leggere il piano né cambiare le impostazioni.

@@ -105,15 +105,30 @@ export function DayCalendar({ dayStart, blocks, events, onMove, onSelect }: Prop
 
   const showNow = now >= dayStart && now < dayStart + 86_400_000;
 
+  const allDayEvents = events.filter((event) => event.allDay);
+
   return (
-    <div
-      className="grid"
-      ref={gridRef}
-      style={{ height: totalMinutes * PX_PER_MINUTE + 20 }}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={() => setDrag(null)}
-    >
+    <>
+      {allDayEvents.length > 0 && (
+        <div className="all-day-events" aria-label="Eventi per l'intera giornata">
+          {allDayEvents.map((event) => (
+            <div className="all-day-event" key={event.id}>
+              <span style={{ backgroundColor: event.color }} aria-hidden="true" />
+              <strong>{event.title}</strong>
+              <small>{event.calendarName}</small>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div
+        className="grid"
+        ref={gridRef}
+        style={{ height: totalMinutes * PX_PER_MINUTE + 20 }}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={() => setDrag(null)}
+      >
       {hours.map((minute) => (
         <div
           key={minute}
@@ -138,18 +153,20 @@ export function DayCalendar({ dayStart, blocks, events, onMove, onSelect }: Prop
           <div
             key={event.id}
             className="block"
-            data-kind="fixed"
+            data-kind={event.kind}
             style={{
               top: yFor(event.start),
               height: Math.max(
                 MIN_BLOCK_HEIGHT,
                 (minutesOfDay(event.end) - minutesOfDay(event.start)) * PX_PER_MINUTE - 3,
               ),
+              borderLeftColor: event.color,
             }}
           >
             <div className="block__title">
               {event.title}
               {event.isShift && <span className="block__badge">turno</span>}
+              <span className="block__badge">{event.calendarName}</span>
             </div>
             <div className="block__time">{range(event.start, event.end)}</div>
           </div>
@@ -195,9 +212,10 @@ export function DayCalendar({ dayStart, blocks, events, onMove, onSelect }: Prop
         );
       })}
 
-      {blocks.length === 0 && events.length === 0 && (
-        <div className="empty">Niente in programma per questo giorno.</div>
-      )}
-    </div>
+        {blocks.length === 0 && events.length === 0 && (
+          <div className="empty">Niente in programma per questo giorno.</div>
+        )}
+      </div>
+    </>
   );
 }
