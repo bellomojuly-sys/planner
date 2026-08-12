@@ -99,41 +99,157 @@ export async function listAccessibleDatabases(
 }
 
 /**
- * Best-effort guess at which Notion property means what, so adding the
- * University and Heemia databases later is a one-click confirmation rather
- * than manual JSON editing.
+ * Picks the property that best fits a field.
+ *
+ * Two rules make this reliable where a plain substring search is not:
+ *
+ *  - **The Notion type is a hard gate.** A due date must be a `date`. Without
+ *    this, "Created Date" wins the search for a deadline simply because it
+ *    contains the word "date".
+ *  - **Candidates are ordered, most specific first**, and an exact name always
+ *    beats a partial one. Without this, "Estimate Confidence" (a High/Medium/
+ *    Low label) is chosen over "Estimated Time" for the duration, because both
+ *    contain "estimate".
+ *
+ * Both of those were real mis-mappings against real databases, and both fail
+ * silently — a planner scheduling against creation dates looks like it works.
  */
-export function guessPropertyMap(
+function pick(
   info: NotionDatabaseInfo,
-): NotionPropertyMap {
-  const byType = (type: string) =>
-    info.properties.filter((p) => p.type === type);
-  const named = (...candidates: string[]) =>
-    info.properties.find((p) =>
-      candidates.some((c) => p.name.toLowerCase().includes(c)),
-    )?.name;
+  types: string[],
+  patterns: RegExp[],
+): string | undefined {
+  const candidates = info.properties.filter((p) => types.includes(p.type));
+  for (const pattern of patterns) {
+    const hit = candidates.find((p) => pattern.test(p.name.trim()));
+    if (hit) return hit.name;
+  }
+  return undefined;
+}
 
-  const statusProp =
-    byType('status')[0]?.name ?? named('stato', 'status', 'fatto', 'done');
+export function guessPropertyMap(info: NotionDatabaseInfo): NotionPropertyMap {
+  const title = info.properties.find((p) => p.type === 'title')?.name ?? 'Name';
 
-  const doneValues =
-    info.properties
-      .find((p) => p.name === statusProp)
-      ?.options?.filter((o) =>
-        /fatt|complet|done|chius|archiv/i.test(o),
-      ) ?? ['Done', 'Fatto'];
+  const status = pick(
+    info,
+    ['status', 'select', 'checkbox'],
+    [/^(stato|status)$/i, /\b(stato|status)\b/i, /^(fatto|done|completat)/i],
+  );
+
+  const doneValues = info.properties
+    .find((p) => p.name === status)
+    ?.options?.filter((o) => /fatt|complet|done|chius|archiv/i.test(o));
+
+  const typeProperty = pick(info, ['select'], [/^(type|tipo)$/i]);
+
+  const areaProperty = pick(
+    info,
+    ['select', 'multi_select'],
+    [/^(area|categoria|category)$/i, /\barea\b/i, /categor/i],
+  );
+
+  // Reverse the area taxonomy by running each real option through the same
+  // normaliser the read path uses, so reads and writes cannot disagree.
+  const areaValues: Partial<Record<Area, string>> = {};
+  for (const option of info.properties.find((p) => p.name === areaProperty)?.options ?? []) {
+    const canonical = /general/i.test(option)
+      ? 'general'
+      : normalizeArea(option, 'general');
+    // normalizeArea returns the fallback for labels it does not recognise;
+    // only record a mapping we are actually confident about.
+    if (canonical === 'general' && !/general/i.test(option)) continue;
+    if (!areaValues[canonical]) areaValues[canonical] = option;
+  }
 
   return {
-    title: byType('title')[0]?.name ?? 'Name',
-    status: statusProp,
-    doneValues,
-    due: named('scadenz', 'due', 'data', 'date'),
-    priority: named('priorit', 'priority'),
-    estimate: named('stima', 'durat', 'estimate', 'tempo'),
-    area: named('area', 'progetto', 'project', 'categoria'),
-    energy: named('energia', 'energy', 'sforzo', 'effort'),
-    notes: named('note', 'descriz', 'notes'),
-    dependsOn: named('dipend', 'depends', 'blocc', 'blocked'),
+    title,
+    status,
+    doneValues: doneValues?.length ? doneValues : ['Done', 'Fatto', 'Completato'],
+
+    // Deliberately excludes "Data minima di inizio" / "Earliest Start", which
+    // are start constraints, not deadlines.
+    due: pick(
+      info,
+      ['date'],
+      [/^(scadenza|due date|due)$/i, /^scadenz/i, /\bdue\b/i, /deadline/i],
+    ),
+
+    priority: pick(
+      info,
+      ['select', 'status', 'number'],
+      [/^(priorit[àa]|priority)$/i, /priorit/i],
+    ),
+
+    // Number-typed, so the High/Medium/Low confidence labels cannot win.
+    estimate: pick(
+      info,
+      ['number'],
+      [
+        /^(durata stimata|estimated time|stima)$/i,
+        /^durata/i,
+        /^estimat/i,
+        /\b(stimat|estimat)/i,
+        /tempo previsto/i,
+      ],
+    ),
+
+    actual: pick(
+      info,
+      ['number'],
+      [/^(tempo effettivo|actual time)$/i, /effettiv/i, /\bactual\b/i, /reale/i],
+    ),
+
+    // Select-typed, so a free-text "Progetto/Cliente" cannot be mistaken for
+    // the area taxonomy.
+    area: areaProperty,
+    areaValues,
+
+    energy: pick(
+      info,
+      ['select'],
+      [/^(energia|energy level|energy)$/i, /energ/i, /sforzo|effort/i],
+    ),
+
+    notes: pick(
+      info,
+      ['rich_text'],
+      [/^(note|notes|descrizione|description)$/i, /^note/i, /descriz/i],
+    ),
+
+    dependsOn: pick(
+      info,
+      ['relation'],
+      [/^(dipende da|blocked by|depends on)$/i, /^dipende/i, /block/i, /depend/i],
+    ),
+
+    dependencyHints: pick(
+      info,
+      ['rich_text'],
+      [/^(dipendenze testuali|dependency hints)$/i, /dipendenz/i, /dependenc/i],
+    ),
+
+    earliestStart: pick(
+      info,
+      ['date'],
+      [
+        /^(data minima di inizio|earliest start)$/i,
+        /minima di inizio/i,
+        /earliest/i,
+      ],
+    ),
+
+    typeProperty,
+    // Only used when `typeProperty` exists; a row whose type is blank is
+    // always treated as work.
+    schedulableTypes: typeProperty
+      ? ['Task', 'Attività', 'Attivita', 'Todo', 'To-do']
+      : undefined,
+
+    schedulingMode: pick(
+      info,
+      ['select'],
+      [/^(modalita scheduling|scheduling mode)$/i, /scheduling/i, /modalit/i],
+    ),
   };
 }
 
@@ -149,10 +265,20 @@ export interface NotionTask {
   dueAt: number | null;
   priority: number | null;
   estimatedMinutes: number | null;
+  actualMinutes: number | null;
+  earliestStartAt: number | null;
   area: string | null;
   energy: Energy | null;
   dependsOnExternalIds: string[];
+  dependencyHints: string | null;
+  /** Locked/Fixed rows must not be split across sittings. */
+  splittable: boolean;
   externalUpdatedAt: number;
+  /**
+   * False for rows that are calendar markers rather than work — meetings that
+   * already exist in Google Calendar, and deadlines like an exam date.
+   */
+  schedulable: boolean;
 }
 
 /**
@@ -203,7 +329,8 @@ export async function fetchTasks(
   return out;
 }
 
-function mapPage(page: any, map: NotionPropertyMap): NotionTask | null {
+/** Exported for tests: this translation is where routing correctness lives. */
+export function mapPage(page: any, map: NotionPropertyMap): NotionTask | null {
   const props = page.properties ?? {};
   const title = plainText(props[map.title]?.title);
   // A row with no title is an empty placeholder in Notion, not a task.
@@ -219,6 +346,21 @@ function mapPage(page: any, map: NotionPropertyMap): NotionTask | null {
     (v) => v.toLowerCase(),
   );
 
+  const typeValue = map.typeProperty
+    ? parseSelectish(props[map.typeProperty])
+    : null;
+  const allowedTypes = map.schedulableTypes ?? [];
+  // A blank type is treated as work: only an explicit Meeting/Deadline is
+  // excluded, so a half-filled row is never silently dropped.
+  const schedulable =
+    !map.typeProperty ||
+    !typeValue ||
+    allowedTypes.some((t) => t.toLowerCase() === typeValue.toLowerCase());
+
+  const mode = map.schedulingMode
+    ? parseSelectish(props[map.schedulingMode])?.toLowerCase()
+    : null;
+
   return {
     externalId: page.id,
     title,
@@ -227,12 +369,23 @@ function mapPage(page: any, map: NotionPropertyMap): NotionTask | null {
     dueAt: map.due ? parseDate(props[map.due]) : null,
     priority: map.priority ? parsePriority(props[map.priority]) : null,
     estimatedMinutes: map.estimate ? parseMinutes(props[map.estimate]) : null,
+    actualMinutes: map.actual ? parseMinutes(props[map.actual]) : null,
+    earliestStartAt: map.earliestStart ? parseDate(props[map.earliestStart]) : null,
     area: map.area ? parseSelectish(props[map.area]) : null,
     energy: map.energy ? parseEnergy(props[map.energy]) : null,
     dependsOnExternalIds: map.dependsOn
       ? (props[map.dependsOn]?.relation ?? []).map((r: any) => r.id)
       : [],
+    dependencyHints: map.dependencyHints
+      ? plainText(props[map.dependencyHints]?.rich_text) || null
+      : null,
+    // "Locked"/"Bloccata" and "Fixed"/"Fissa" mean the work happens in one
+    // sitting. They deliberately do not set the pinned flag: pinning is what
+    // the app's manual drag does, and a pinned task with no placed block
+    // would never be scheduled at all.
+    splittable: !mode || !/lock|blocc|fixed|fiss/.test(mode),
     externalUpdatedAt: Date.parse(page.last_edited_time ?? '') || Date.now(),
+    schedulable,
   };
 }
 
@@ -283,6 +436,7 @@ export async function createTask(
     notes?: string | null;
     dueAt?: number | null;
     estimatedMinutes?: number | null;
+    area?: Area;
   },
 ): Promise<string> {
   const properties: Record<string, unknown> = {
@@ -301,6 +455,13 @@ export async function createTask(
   }
   if (map.estimate && task.estimatedMinutes) {
     properties[map.estimate] = { number: task.estimatedMinutes };
+  }
+
+  // Only write a label this database actually offers — inventing an option
+  // makes Notion reject the whole page.
+  const areaLabel = task.area ? map.areaValues?.[task.area] : undefined;
+  if (map.area && areaLabel) {
+    properties[map.area] = { select: { name: areaLabel } };
   }
 
   const created = await notionFetch<any>(
@@ -387,15 +548,27 @@ function parseEnergy(prop: any): Energy | null {
   return null;
 }
 
-/** Maps a free-text Notion area onto our canonical enum. */
+/**
+ * Maps a Notion `Area` value onto our canonical enum.
+ *
+ * This is what lets a single Notion database feed several planner areas:
+ * University and Heemia are not separate databases, they are options of the
+ * `Area` select in the shared Tasks database, and each row is routed by its
+ * own value rather than by which database it came from.
+ *
+ * Ordered most specific first — "MG Integration" must not be caught by the
+ * generic `integration` branch before the Heemia and University checks run.
+ */
 export function normalizeArea(raw: string | null, fallback: Area): Area {
   if (!raw) return fallback;
   const s = raw.toLowerCase();
-  if (/mg|integration/.test(s)) return 'mg';
-  if (/univ|esame|studio|lezione/.test(s)) return 'university';
   if (/heemia/.test(s)) return 'heemia';
-  if (/salut|health|palestra|medic/.test(s)) return 'health';
+  if (/\bmg\b|integration/.test(s)) return 'mg';
+  if (/univ|esame|exam|studio|corso|lezione/.test(s)) return 'university';
+  if (/salut|health|palestra|medic|benessere/.test(s)) return 'health';
   if (/spesa|commission|errand/.test(s)) return 'errand';
   if (/person/.test(s)) return 'personal';
+  // "Carriera / ICT" lands here. It has no dedicated planner area yet, so it
+  // is filed under general rather than being dropped.
   return fallback;
 }

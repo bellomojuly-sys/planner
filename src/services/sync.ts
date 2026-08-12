@@ -25,6 +25,8 @@ export interface SyncReport {
   tasksCompleted: number;
   eventsUpserted: number;
   eventsRemoved: number;
+  /** Rows skipped because they are meetings or deadlines, not work. */
+  tasksSkipped: number;
   /** True when something changed that should trigger a reschedule. */
   changed: boolean;
   errors: string[];
@@ -44,6 +46,7 @@ export async function syncNotion(
     tasksCompleted: 0,
     eventsUpserted: 0,
     eventsRemoved: 0,
+    tasksSkipped: 0,
     changed: false,
     errors: [],
   };
@@ -66,6 +69,13 @@ export async function syncNotion(
       const remote = await notion.fetchTasks(env.NOTION_TOKEN, source, since);
 
       for (const item of remote) {
+        // Meetings already exist as Google Calendar events, and a deadline is
+        // a date marker: scheduling either as work would double-book the day.
+        if (!item.schedulable) {
+          report.tasksSkipped++;
+          continue;
+        }
+
         const existing = await db.query.tasks.findFirst({
           where: and(
             eq(tasks.userId, userId),
@@ -102,6 +112,9 @@ export async function syncNotion(
             priority: item.priority ?? 3,
             estimatedMinutes: estimated,
             plannedMinutes: learned.plannedMinutes,
+            actualMinutes: item.actualMinutes,
+            earliestStartAt: item.earliestStartAt,
+            splittable: item.splittable,
             estimateSource: item.estimatedMinutes ? 'notion' : 'learned',
             estimateConfidence: learned.confidence,
             status: item.done ? 'done' : 'todo',
@@ -140,6 +153,12 @@ export async function syncNotion(
             plannedMinutes: existing.pinned
               ? existing.plannedMinutes
               : learned.plannedMinutes,
+            actualMinutes: item.actualMinutes ?? existing.actualMinutes,
+            // A manual drag in the app wins over Notion's start constraint.
+            earliestStartAt: existing.pinned
+              ? existing.earliestStartAt
+              : item.earliestStartAt,
+            splittable: item.splittable,
             dueAt: item.dueAt,
             status: item.done ? 'done' : existing.status === 'done' ? 'todo' : existing.status,
             completedAt: item.done ? item.externalUpdatedAt : null,
@@ -260,6 +279,7 @@ export async function syncCalendar(
     tasksCompleted: 0,
     eventsUpserted: 0,
     eventsRemoved: 0,
+    tasksSkipped: 0,
     changed: false,
     errors: [],
   };

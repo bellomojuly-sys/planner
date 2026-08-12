@@ -79,14 +79,52 @@ npm run db:migrate:remote    # in produzione
 
 ### 3. Notion
 
-1. https://www.notion.so/my-integrations → **New integration** → copia il token.
-2. In Notion, apri *General Tasks* → menu `···` → **Connections** → aggiungi
-   l'integrazione. Ripeti per *MG Integration* (e più avanti per University e
-   Heemia).
+**I database sono due, non quattro.** University e Heemia non sono database
+separati: sono opzioni della proprietà `Area` dentro il database condiviso
+`Tasks` — la pagina Heemia in Notion lo dice esplicitamente ("You add them in
+Tasks and set Area = Heemia"). Ogni riga viene instradata dal proprio valore di
+`Area`, non dal database di provenienza.
 
-I database si collegano poi dall'app, in **Impostazioni** → *Database Notion*.
-Le proprietà (stato, scadenza, stima, priorità…) vengono riconosciute
-automaticamente dai loro nomi, quindi non serve rinominare nulla in Notion.
+| Database Notion | ID | Aree che alimenta |
+|---|---|---|
+| `Tasks` | `22dcf789-3820-40c9-8299-fffd0a518382` | Heemia, University, Personal, health, Carriera / ICT |
+| `Task MG Integration` | `e32eaadf-2a02-4e9e-9a2f-c2d0c660fa89` | MG Integration |
+
+Passi:
+
+1. https://www.notion.so/my-integrations → **New integration** → copia il token.
+2. In Notion apri **Tasks** → menu `···` → **Connections** → aggiungi
+   l'integrazione. Ripeti per **Task MG Integration**.
+3. Collega i due database, o dall'app in **Impostazioni** → *Database Notion*,
+   oppure in un colpo solo:
+
+```bash
+PLANNER_URL=https://tuo-worker.workers.dev PLANNER_TOKEN=<token full> npm run seed
+```
+
+Le proprietà vengono riconosciute dallo schema, quindi non serve rinominare
+nulla. Il riconoscimento è **guidato dal tipo Notion, non solo dal nome**: una
+scadenza deve essere una `date`, una stima un `number`. Senza questo vincolo
+"Created Date" vincerebbe la ricerca della scadenza perché contiene "date", e
+"Estimate Confidence" (un'etichetta Alta/Media/Bassa) vincerebbe quella della
+durata perché contiene "estimate" — due errori che non danno errore, danno solo
+un piano sbagliato.
+
+**Righe ignorate.** Il database `Tasks` tiene riunioni e scadenze insieme alle
+attività (`Type` = Task | Meeting | Deadline). Solo le righe `Task` vengono
+pianificate: una riunione è già un evento su Google Calendar, e una `Deadline`
+come la data di un esame è un segnaposto, non lavoro da svolgere. Le righe
+saltate vengono contate nel report di sincronizzazione.
+
+**Colonne lette in più**, perché il tuo schema le prevede già:
+`Earliest Start` / `Data minima di inizio` (vincolo di inizio),
+`Actual Time` / `Tempo effettivo` (tempo reale),
+`Scheduling Mode` / `Modalita scheduling` — dove *Locked* e *Fixed* significano
+"in un'unica sessione, non divisibile". Non impostano il blocco manuale: quello
+si ottiene trascinando il blocco nell'app.
+
+> `Carriera / ICT` non ha ancora un'area dedicata nel planner e finisce sotto
+> *Generale*. Posso aggiungerla come area a sé se ti serve.
 
 ### 4. Google Calendar
 

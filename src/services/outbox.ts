@@ -174,6 +174,7 @@ async function notionUpsert(
       notes: task.notes,
       dueAt: task.dueAt,
       estimatedMinutes: task.estimatedMinutes,
+      area: task.area,
     },
   );
 

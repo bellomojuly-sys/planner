@@ -255,13 +255,7 @@ async function createTask(
 
   // Mirror into the matching Notion database so Notion stays the source of
   // record — queued, because a Notion outage must not lose the capture.
-  const source = await db.query.taskSources.findFirst({
-    where: and(
-      eq(taskSources.userId, userId),
-      eq(taskSources.area, area),
-      eq(taskSources.enabled, true),
-    ),
-  });
+  const source = await pickSourceForArea(db, userId, area);
   if (source) {
     await db.insert(outbox).values({
       userId,
@@ -274,6 +268,30 @@ async function createTask(
     message: `Aggiunta "${created!.title}" (${learned.plannedMinutes} min)`,
     trigger: intent.urgent || (intent.priority ?? 3) === 1 ? 'urgent_task' : 'capture',
   };
+}
+
+/**
+ * Chooses which Notion database a new task belongs in.
+ *
+ * A source registered for one area is not the only home for that area: the
+ * shared Tasks database carries an `Area` select and can hold University,
+ * Heemia and the rest. So prefer an exact area match, then any database that
+ * has an Area property (it can represent this area), and only then give up.
+ * Without the middle step a voice-captured University task would never reach
+ * Notion at all.
+ */
+async function pickSourceForArea(db: DB, userId: string, area: string) {
+  const sources = await db
+    .select()
+    .from(taskSources)
+    .where(and(eq(taskSources.userId, userId), eq(taskSources.enabled, true)));
+
+  return (
+    sources.find((s) => s.area === area) ??
+    sources.find((s) => s.propertyMap.area && s.propertyMap.areaValues?.[area as never]) ??
+    sources.find((s) => s.propertyMap.area) ??
+    null
+  );
 }
 
 async function completeTask(

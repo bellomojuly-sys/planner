@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Private personal planning agent — Notion + Google Calendar + Claude, on Cloudflare Workers.",
+  "description": "Private personal planning agent \u2014 Notion + Google Calendar + Claude, on Cloudflare Workers.",
   "scripts": {
     "dev": "concurrently -n api,web -c cyan,magenta \"wrangler dev\" \"vite --config web/vite.config.ts\"",
     "dev:api": "wrangler dev",
@@ -13,7 +13,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply planner-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply planner-db --remote",
-    "seed": "tsx scripts/seed.ts",
+    "seed": "node scripts/setup-sources.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

@@ -253,10 +253,32 @@ export interface NotionPropertyMap {
   due?: string;
   priority?: string;
   estimate?: string;
+  /** Real elapsed time already recorded in Notion. */
+  actual?: string;
   area?: string;
   energy?: string;
   notes?: string;
   dependsOn?: string;
+  /** Free-text prerequisites, for rows where the relation is not filled in. */
+  dependencyHints?: string;
+  earliestStart?: string;
+  /**
+   * Distinguishes real work from calendar markers. A database that keeps
+   * meetings and deadlines alongside tasks would otherwise have its exams
+   * booked as if they were work to be done.
+   */
+  typeProperty?: string;
+  /** Values of `typeProperty` that represent schedulable work. */
+  schedulableTypes?: string[];
+  /** Locked/Fixed rows must stay in a single block. */
+  schedulingMode?: string;
+  /**
+   * Canonical area -> the label this database actually uses for it, e.g.
+   * `{ university: 'University', mg: 'MG Integration' }`. Needed when writing
+   * a task back, so a voice-captured University task lands under the right
+   * Area instead of an empty one.
+   */
+  areaValues?: Partial<Record<Area, string>>;
 }
 
 // ---------------------------------------------------------------------------
