@@ -1,0 +1,43 @@
+{
+  "name": "planner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Private personal planning agent — Notion + Google Calendar + Claude, on Cloudflare Workers.",
+  "scripts": {
+    "dev": "concurrently -n api,web -c cyan,magenta \"wrangler dev\" \"vite --config web/vite.config.ts\"",
+    "dev:api": "wrangler dev",
+    "dev:web": "vite --config web/vite.config.ts",
+    "build": "vite build --config web/vite.config.ts",
+    "deploy": "npm run build && wrangler deploy",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "wrangler d1 migrations apply planner-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply planner-db --remote",
+    "seed": "tsx scripts/seed.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
+    "@date-fns/tz": "^1.4.1",
+    "date-fns": "^4.1.0",
+    "drizzle-orm": "^0.44.6",
+    "hono": "^4.10.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260804.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.0.4",
+    "concurrently": "^9.2.1",
+    "drizzle-kit": "^0.31.5",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.42.0"
+  }
+}

@@ -1,0 +1,52 @@
+name = "planner"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The built PWA is served straight from the Worker. No second host, no CORS.
+[assets]
+directory = "web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# The placeholder ids below work for `npm run dev` (local emulation ignores
+# them). Replace both with the real ids from `wrangler d1 create planner-db`
+# and `wrangler kv namespace create CACHE` before deploying.
+[[d1_databases]]
+binding = "DB"
+database_name = "planner-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# Short-lived cache: Google/Notion payloads, dedupe keys for cron jobs.
+[[kv_namespaces]]
+binding = "CACHE"
+id = "0000000000000000000000000000000a"
+
+# Runs every 5 minutes. The handler resolves what is actually due in
+# Europe/Rome local time, so DST and the variable "30 min after the shift
+# ends" trigger both work without a second cron entry.
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+APP_TIMEZONE = "Europe/Rome"
+APP_LOCALE = "it-IT"
+ENVIRONMENT = "production"
+
+[observability]
+enabled = true
+
+# ---------------------------------------------------------------------------
+# Secrets — set with `wrangler secret put <NAME>`, never in this file:
+#
+#   MASTER_KEY            base64 32 bytes. Encrypts credentials at rest.
+#   ANTHROPIC_API_KEY     Claude API key.
+#   NOTION_TOKEN          Notion internal integration token.
+#   GOOGLE_CLIENT_ID      OAuth client (Desktop or Web).
+#   GOOGLE_CLIENT_SECRET
+#   GOOGLE_REFRESH_TOKEN  Obtained once via scripts/google-auth.mjs.
+#   VAPID_PUBLIC_KEY      Web Push. Generate with scripts/gen-keys.mjs.
+#   VAPID_PRIVATE_KEY
+#   VAPID_SUBJECT         e.g. mailto:you@example.com
+# ---------------------------------------------------------------------------
