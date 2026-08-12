@@ -151,7 +151,14 @@ button {
 .main {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 16px calc(var(--safe-bottom) + 96px);
+  /*
+   * The bottom padding has to clear the capture bar, which is fixed above the
+   * tab bar. Derived from the same variables rather than a hand-tuned number,
+   * so the two cannot drift apart: 74px offset + 50px bar + 16px breathing
+   * room. At a flat 96px the last block of the day sat behind the bar and
+   * could not be scrolled into view.
+   */
+  padding: 4px 16px calc(var(--safe-bottom) + 74px + 50px + 16px);
   -webkit-overflow-scrolling: touch;
 }
 
