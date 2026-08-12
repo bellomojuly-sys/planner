@@ -22,7 +22,22 @@ function minutesToTime(value: number): string {
   return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
 }
 
+interface IntegrationCheck {
+  service: string;
+  state: 'ok' | 'missing' | 'error';
+  detail: string;
+}
+
+const LABELS: Record<string, string> = {
+  claude: 'Claude — voce',
+  notion: 'Notion — attività',
+  google: 'Google Calendar — turni e lezioni',
+  push: 'Notifiche',
+};
+
 export function Settings({ onChanged }: { onChanged: () => void }) {
+  const [checks, setChecks] = useState<IntegrationCheck[]>([]);
+  const [checking, setChecking] = useState(false);
   const [data, setData] = useState<SettingsView | null>(null);
   const [draft, setDraft] = useState<Record<string, number | string | boolean>>({});
   const [status, setStatus] = useState<{ tone: string; text: string } | null>(null);
@@ -82,18 +97,67 @@ export function Settings({ onChanged }: { onChanged: () => void }) {
       <div className="card">
         <h2>Integrazioni</h2>
         <ul className="list">
-          {Object.entries(data.integrations).map(([name, ok]) => (
-            <li key={name}>
-              <div className="list__main">
-                <div className="list__title">{name}</div>
-                <div className="list__meta">
-                  {ok ? 'Collegata' : 'Non configurata — imposta il secret nel Worker'}
+          {Object.entries(data.integrations).map(([name, present]) => {
+            // A live probe, when one has been run, always beats the mere
+            // presence of a secret: a wrong key looks identical to a right one
+            // until something actually calls the service.
+            const probe = checks.find((c) => c.service === name);
+            const state = probe?.state ?? (present ? 'ok' : 'missing');
+
+            return (
+              <li key={name}>
+                <div className="list__main">
+                  <div className="list__title">{LABELS[name] ?? name}</div>
+                  <div className="list__meta">
+                    {probe
+                      ? probe.detail
+                      : present
+                        ? 'Secret presente — non ancora verificata'
+                        : 'Non configurata'}
+                  </div>
                 </div>
-              </div>
-              <span className="chip">{ok ? '✓' : '—'}</span>
-            </li>
-          ))}
+                <span className="chip">
+                  {state === 'ok' ? '\u2713' : state === 'error' ? '\u26a0' : '\u2014'}
+                </span>
+              </li>
+            );
+          })}
         </ul>
+
+        <button
+          className="btn"
+          disabled={checking}
+          onClick={async () => {
+            setChecking(true);
+            try {
+              const { data: result } = await api.get<{ checks: IntegrationCheck[] }>(
+                '/settings/integrations/check',
+              );
+              setChecks(result.checks);
+              const broken = result.checks.filter((c) => c.state !== 'ok');
+              setStatus(
+                broken.length === 0
+                  ? { tone: 'info', text: 'Tutte le integrazioni rispondono.' }
+                  : {
+                      tone: 'warn',
+                      text: `${broken.length} da sistemare: ${broken
+                        .map((c) => LABELS[c.service] ?? c.service)
+                        .join(', ')}.`,
+                    },
+              );
+            } catch (err) {
+              setStatus({
+                tone: 'error',
+                text: err instanceof ApiError ? err.message : 'Errore.',
+              });
+            } finally {
+              setChecking(false);
+            }
+          }}
+        >
+          {checking ? 'Verifico\u2026' : 'Verifica connessioni'}
+        </button>
+
         <button
           className="btn"
           disabled={busy}

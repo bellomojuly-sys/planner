@@ -12,6 +12,7 @@ import {
   AREAS,
 } from '../db/schema';
 import * as notion from '../integrations/notion';
+import { checkIntegrations } from '../services/integration-check';
 import { sealJson } from '../crypto/encryption';
 import { replan } from '../services/planner';
 import { syncNotion, syncCalendars } from '../services/sync';
@@ -56,6 +57,15 @@ settingsRoutes.get('/', async (c) => {
       push: Boolean(c.env.VAPID_PUBLIC_KEY),
     },
   });
+});
+
+/**
+ * Live connectivity test. Separate from GET /settings because it makes real
+ * outbound calls: the settings screen must stay fast, and this only runs when
+ * asked.
+ */
+settingsRoutes.get('/integrations/check', requireAuth('full'), async (c) => {
+  return c.json({ checks: await checkIntegrations(c.env) });
 });
 
 settingsRoutes.patch('/', requireAuth('full'), async (c) => {
