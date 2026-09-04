@@ -528,3 +528,108 @@ describe('pinned work', () => {
     expect(other.start < pinned.end && pinned.start < other.end).toBe(false);
   });
 });
+
+describe('rescheduling when a fixed commitment moves', () => {
+  // Wednesday 07:00 Rome, the first day of the shift week.
+  const WEDNESDAY = MONDAY + 2 * 86_400_000;
+  const WEDNESDAY_MIDNIGHT = WEDNESDAY - 7 * 3_600_000;
+
+  const eveningShift = {
+    start: WEDNESDAY + 11 * 3_600_000, // 18:00
+    end: WEDNESDAY + 15 * 3_600_000 + 1_800_000, // 22:30
+  };
+  // The same shift pulled to the morning, which is what eitje actually does.
+  const morningShift = { start: WEDNESDAY, end: WEDNESDAY + 6 * 3_600_000 };
+
+  /** A realistic week: a phase chain, deep university work, errands. */
+  const week = (): SchedulableTask[] => [
+    task({ id: 'p15', title: 'MG Fase 15', energy: 'high', plannedMinutes: 90, priority: 2 }),
+    task({ id: 'p16', title: 'MG Fase 16', energy: 'high', plannedMinutes: 90, priority: 2 }),
+    task({ id: 'p17', title: 'MG Fase 17', energy: 'medium', plannedMinutes: 60, priority: 2 }),
+    task({ id: 'study', title: 'Fontys deliverable', energy: 'high', plannedMinutes: 120, priority: 1 }),
+    task({ id: 'heemia', title: 'Heemia content', energy: 'medium', plannedMinutes: 60, priority: 3 }),
+    task({ id: 'admin', title: 'Amministrazione', energy: 'low', plannedMinutes: 45, priority: 4 }),
+  ];
+
+  const chain: DepMap = new Map([
+    ['p16', [{ dependsOnId: 'p15', lagMinutes: 0 }]],
+    ['p17', [{ dependsOnId: 'p16', lagMinutes: 0 }]],
+  ]);
+
+  const before = () => run(week(), { deps: chain, busy: [eveningShift] });
+  const after = () => run(week(), { deps: chain, busy: [morningShift] });
+
+  it('replans without dropping any task', () => {
+    const baseline = before();
+    const moved = after();
+
+    expect(baseline.unplaced).toEqual([]);
+    expect(moved.unplaced).toEqual([]);
+    expect(moved.blocks.map((b) => b.taskId).filter(Boolean).sort()).toEqual(
+      baseline.blocks.map((b) => b.taskId).filter(Boolean).sort(),
+    );
+  });
+
+  it('never books over the commitment in its new position', () => {
+    for (const block of after().blocks) {
+      expect(block.start < morningShift.end && morningShift.start < block.end).toBe(false);
+    }
+  });
+
+  it('leaves the days before the change untouched', () => {
+    const untouched = (r: ReturnType<typeof run>) =>
+      r.blocks
+        .filter((b) => b.start < WEDNESDAY_MIDNIGHT)
+        .map((b) => `${b.taskId}:${b.partIndex}@${b.start}`);
+
+    expect(untouched(after())).toEqual(untouched(before()));
+  });
+
+  it('keeps the phase chain in order after the move', () => {
+    const moved = after();
+    const at = (id: string) => moved.blocks.filter((b) => b.taskId === id);
+    const last = (id: string) => Math.max(...at(id).map((b) => b.end));
+    const first = (id: string) => Math.min(...at(id).map((b) => b.start));
+
+    expect(last('p15')).toBeLessThanOrEqual(first('p16'));
+    expect(last('p16')).toBeLessThanOrEqual(first('p17'));
+  });
+
+  it('still protects the morning for demanding work after the move', () => {
+    const moved = after();
+    const study = moved.blocks.filter((b) => b.taskId === 'study');
+
+    expect(study.length).toBeGreaterThan(0);
+    for (const part of study) expect(part.zone).toBe('morning');
+  });
+
+  it('keeps a manually pinned block in place when the shift moves', () => {
+    const pinnedStart = MONDAY + 7 * 3_600_000; // Monday 14:00 Rome
+    const pinned = {
+      taskId: 'call',
+      title: 'Call cliente, spostata a mano',
+      start: pinnedStart,
+      end: pinnedStart + 3_600_000,
+      kind: 'task' as const,
+      zone: 'afternoon' as const,
+      partIndex: 0,
+      partCount: 1,
+      zoneCompromised: false,
+    };
+
+    const replanned = schedule({
+      now: MONDAY,
+      horizonEnd: MONDAY + 7 * 86_400_000,
+      timezone: TZ,
+      settings,
+      tasks: week(),
+      dependencies: chain,
+      busy: [morningShift],
+      pinnedBlocks: [pinned],
+    });
+
+    const kept = replanned.blocks.find((b) => b.taskId === 'call')!;
+    expect(kept.start).toBe(pinned.start);
+    expect(kept.end).toBe(pinned.end);
+  });
+});
