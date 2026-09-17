@@ -40,9 +40,62 @@ export function schedule(input: ScheduleInput): ScheduleResult {
 
   const taskEnd = new Map<string, number>(input.knownTaskEnds ?? []);
 
-  // Pinned blocks are immovable. They count as busy time and are re-emitted
-  // untouched, so a manual drag survives every subsequent reschedule.
-  const pinned = input.pinnedBlocks.filter((b) => b.end > now);
+  // A permanent task may become impossible when a fixed commitment moves on
+  // top of it. The commitment is a fact about unavailable time, while the pin
+  // forbids us from choosing a replacement time. Keep the pin on the task but
+  // do not publish an overlap: the whole task becomes an actionable conflict.
+  const futurePinned = input.pinnedBlocks.filter((b) => b.end > now);
+  const conflictTaskIds = new Set(
+    futurePinned
+      .filter(
+        (block) =>
+          block.taskId &&
+          input.busy.some((busy) => overlaps(block.start, block.end, busy.start, busy.end)),
+      )
+      .map((block) => block.taskId!),
+  );
+
+  for (const taskId of conflictTaskIds) {
+    const block = futurePinned.find((candidate) => candidate.taskId === taskId)!;
+    unplaced.push({
+      taskId,
+      title: block.title,
+      reason: 'pinned_conflict',
+      detail: 'Un impegno fisso occupa l’orario di un’attività permanente.',
+    });
+    warnings.push(
+      `“${block.title}” è permanente ma ora si sovrappone a un impegno fisso. Scegli come ricollocarla.`,
+    );
+  }
+
+  // After Giulia accepts the conflict outcome, the overlapping calendar block
+  // is removed but the task deliberately remains permanent. Keep surfacing it
+  // until she explicitly moves or releases it.
+  const pinnedTaskIdsWithBlocks = new Set(
+    futurePinned.map((block) => block.taskId).filter((id): id is string => Boolean(id)),
+  );
+  for (const task of input.tasks) {
+    if (
+      task.pinned &&
+      !pinnedTaskIdsWithBlocks.has(task.id) &&
+      !conflictTaskIds.has(task.id)
+    ) {
+      conflictTaskIds.add(task.id);
+      unplaced.push({
+        taskId: task.id,
+        title: task.title,
+        reason: 'pinned_conflict',
+        detail: 'L’attività è permanente ma non ha più un orario valido.',
+      });
+      warnings.push(
+        `“${task.title}” è permanente ma non ha un orario valido. Scegli come ricollocarla.`,
+      );
+    }
+  }
+
+  const pinned = futurePinned.filter(
+    (block) => !block.taskId || !conflictTaskIds.has(block.taskId),
+  );
   const busy = [
     ...input.busy,
     ...pinned.map((b) => ({ start: b.start, end: b.end })),
@@ -156,6 +209,10 @@ export function schedule(input: ScheduleInput): ScheduleResult {
 
   blocks.sort((a, b) => a.start - b.start);
   return { blocks, unplaced, taskEnd, warnings };
+}
+
+function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
 }
 
 // ---------------------------------------------------------------------------

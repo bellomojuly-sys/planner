@@ -106,7 +106,15 @@ export interface PlanResponse {
     trigger: string;
     status: string;
     at: number;
-    summary: { changes?: string[]; unplaced?: Array<{ title: string; reason: string }> } | null;
+    summary: {
+      changes?: string[];
+      unplaced?: Array<{ title: string; reason: string }>;
+      warnings?: string[];
+      applied?: boolean;
+      requiresConfirmation?: boolean;
+      confirmationReasons?: Array<'permanent_task_conflict' | 'near_term_change'>;
+      blockedByStaleData?: boolean;
+    } | null;
   } | null;
 }
 

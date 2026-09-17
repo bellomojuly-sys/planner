@@ -7,6 +7,9 @@ import {
   scheduleRuns,
   settings as settingsTable,
   outbox,
+  taskSources,
+  calendarSources,
+  calendarSyncState,
   type Settings,
 } from '../db/schema';
 import { schedule } from '../scheduler/engine';
@@ -21,6 +24,11 @@ import { getPlannerCalendarId } from './calendar-sources';
 import { DAY_MS, localDateKey, formatRange } from '../lib/time';
 import { toPlannerError } from '../lib/errors';
 import type { Env } from '../env';
+import {
+  confirmationReasons,
+  confirmationReasonMessage,
+  type ConfirmationReason,
+} from './replan-policy';
 
 export type RescheduleTrigger =
   | 'cron'
@@ -39,6 +47,18 @@ export interface PlanDiff {
   warnings: string[];
   /** Italian one-liners describing what changed, for the UI and notifications. */
   changes: string[];
+  /** False when the existing published plan was deliberately left untouched. */
+  applied: boolean;
+  requiresConfirmation: boolean;
+  confirmationReasons: ConfirmationReason[];
+  blockedByStaleData: boolean;
+}
+
+export interface ReplanOptions {
+  /** Explicit approval from the full-access UI for this freshly recomputed plan. */
+  confirmed?: boolean;
+  /** Errors from the sync cycle that immediately preceded this replan. */
+  syncErrors?: string[];
 }
 
 /**
@@ -55,14 +75,57 @@ export async function replan(
   db: DB,
   userId: string,
   trigger: RescheduleTrigger,
+  options: ReplanOptions = {},
 ): Promise<PlanDiff> {
   const startedAt = Date.now();
+  // A proposal is valid only against the exact inputs used to compute it.
+  // Any later attempt supersedes older pending proposals before doing work.
+  await db
+    .update(scheduleRuns)
+    .set({ status: 'superseded', finishedAt: Date.now() })
+    .where(
+      and(
+        eq(scheduleRuns.userId, userId),
+        eq(scheduleRuns.status, 'pending_confirmation'),
+      ),
+    );
   const [run] = await db
     .insert(scheduleRuns)
     .values({ userId, trigger, status: 'running' })
     .returning({ id: scheduleRuns.id });
 
   try {
+    const dataIssues = await loadPlanningDataIssues(db, userId, options.syncErrors);
+    if (dataIssues.length > 0) {
+      const diff: PlanDiff = {
+        created: 0,
+        moved: 0,
+        removed: 0,
+        unplaced: [],
+        warnings: [
+          'Il piano non è stato aggiornato perché Notion o Google Calendar non sono sincronizzati.',
+          ...dataIssues,
+        ],
+        changes: [],
+        applied: false,
+        requiresConfirmation: false,
+        confirmationReasons: [],
+        blockedByStaleData: true,
+      };
+
+      await db
+        .update(scheduleRuns)
+        .set({
+          status: 'blocked_stale_data',
+          summary: diff,
+          finishedAt: Date.now(),
+          durationMs: Date.now() - startedAt,
+        })
+        .where(eq(scheduleRuns.id, run!.id));
+
+      return diff;
+    }
+
     // Phase chains are derived from titles, so they must be refreshed before
     // the dependency graph is read — a "Fase 16" added by voice a moment ago
     // has to be linked to "Fase 15" on this same pass.
@@ -99,6 +162,38 @@ export async function replan(
       pinnedBlocks,
       knownTaskEnds,
     });
+
+    const preview = previewPlanDiff(existingBlocks, result, prefs.timezone);
+    const reasons = confirmationReasons(existingBlocks, result, now, prefs.timezone);
+
+    if (reasons.length > 0 && !options.confirmed) {
+      const diff: PlanDiff = {
+        ...preview,
+        warnings: [
+          ...preview.warnings,
+          ...reasons.map(confirmationReasonMessage),
+        ],
+        applied: false,
+        requiresConfirmation: true,
+        confirmationReasons: reasons,
+        blockedByStaleData: false,
+      };
+
+      await db
+        .update(scheduleRuns)
+        .set({
+          status: 'pending_confirmation',
+          blocksPlaced: diff.created,
+          blocksMoved: diff.moved,
+          tasksUnplaced: diff.unplaced.length,
+          summary: diff,
+          finishedAt: Date.now(),
+          durationMs: Date.now() - startedAt,
+        })
+        .where(eq(scheduleRuns.id, run!.id));
+
+      return diff;
+    }
 
     const diff = await reconcileBlocks(
       db,
@@ -163,6 +258,47 @@ async function loadSettings(
     timezone: user?.timezone ?? 'Europe/Rome',
     planningHorizonDays: prefs!.planningHorizonDays,
   };
+}
+
+async function loadPlanningDataIssues(
+  db: DB,
+  userId: string,
+  currentErrors: string[] = [],
+): Promise<string[]> {
+  const [notionSources, configuredCalendars, calendarStates] = await Promise.all([
+    db
+      .select()
+      .from(taskSources)
+      .where(and(eq(taskSources.userId, userId), eq(taskSources.enabled, true))),
+    db
+      .select()
+      .from(calendarSources)
+      .where(and(eq(calendarSources.userId, userId), eq(calendarSources.enabled, true))),
+    db
+      .select()
+      .from(calendarSyncState)
+      .where(eq(calendarSyncState.userId, userId)),
+  ]);
+
+  const issues = new Set(currentErrors.filter(Boolean));
+  for (const source of notionSources) {
+    if (source.lastSyncError) issues.add(`${source.name}: ${source.lastSyncError}`);
+  }
+
+  const activeCalendarIds = new Set(
+    configuredCalendars.length === 0
+      ? calendarStates.map((state) => state.calendarId)
+      : configuredCalendars
+          .filter((source) => source.role !== 'ignore')
+          .map((source) => source.calendarId),
+  );
+  for (const state of calendarStates) {
+    if (activeCalendarIds.has(state.calendarId) && state.lastError) {
+      issues.add(`${state.calendarId}: ${state.lastError}`);
+    }
+  }
+
+  return [...issues];
 }
 
 async function loadSchedulableTasks(
@@ -263,6 +399,82 @@ function blockKey(
   return `${block.kind}:${localDateKey(block.start, timezone)}`;
 }
 
+function previewPlanDiff(
+  existing: Array<typeof scheduledBlocks.$inferSelect>,
+  result: ScheduleResult,
+  timezone: string,
+): Omit<
+  PlanDiff,
+  'applied' | 'requiresConfirmation' | 'confirmationReasons' | 'blockedByStaleData'
+> {
+  const diff = {
+    created: 0,
+    moved: 0,
+    removed: 0,
+    unplaced: result.unplaced.map((item) => ({
+      title: item.title,
+      reason: item.reason,
+    })),
+    warnings: [...result.warnings],
+    changes: [] as string[],
+  };
+  const existingByKey = new Map(
+    existing.map((block) => [
+      blockKey(
+        {
+          taskId: block.taskId,
+          partIndex: block.partIndex,
+          kind: block.kind,
+          start: block.startAt,
+        },
+        timezone,
+      ),
+      block,
+    ]),
+  );
+  const seen = new Set<string>();
+
+  for (const block of result.blocks) {
+    const key = blockKey(block, timezone);
+    seen.add(key);
+    const prior = existingByKey.get(key);
+    if (!prior) {
+      diff.created++;
+      diff.changes.push(
+        `Aggiunto: ${block.title} — ${formatRange(block.start, block.end, timezone)}`,
+      );
+      continue;
+    }
+    if (prior.pinned) continue;
+    if (
+      prior.startAt !== block.start ||
+      prior.endAt !== block.end ||
+      prior.title !== block.title
+    ) {
+      diff.moved++;
+      diff.changes.push(
+        `Spostato: ${block.title} → ${formatRange(block.start, block.end, timezone)}`,
+      );
+    }
+  }
+
+  const conflictingTaskIds = new Set(
+    result.unplaced
+      .filter((item) => item.reason === 'pinned_conflict')
+      .map((item) => item.taskId),
+  );
+  for (const [key, block] of existingByKey) {
+    if (seen.has(key) || (block.pinned && !block.taskId) ||
+        (block.pinned && block.taskId && !conflictingTaskIds.has(block.taskId))) {
+      continue;
+    }
+    diff.removed++;
+    diff.changes.push(`Rimosso: ${block.title}`);
+  }
+
+  return diff;
+}
+
 async function reconcileBlocks(
   db: DB,
   userId: string,
@@ -278,6 +490,10 @@ async function reconcileBlocks(
     unplaced: result.unplaced.map((u) => ({ title: u.title, reason: u.reason })),
     warnings: result.warnings,
     changes: [],
+    applied: true,
+    requiresConfirmation: false,
+    confirmationReasons: [],
+    blockedByStaleData: false,
   };
 
   const existingByKey = new Map(
@@ -359,8 +575,18 @@ async function reconcileBlocks(
   }
 
   // Anything we no longer plan gets removed locally and in Google.
+  const conflictingTaskIds = new Set(
+    result.unplaced
+      .filter((item) => item.reason === 'pinned_conflict')
+      .map((item) => item.taskId),
+  );
   for (const [key, block] of existingByKey) {
-    if (seen.has(key) || block.pinned) continue;
+    if (
+      seen.has(key) ||
+      (block.pinned && (!block.taskId || !conflictingTaskIds.has(block.taskId)))
+    ) {
+      continue;
+    }
 
     if (block.googleEventId) {
       await db.insert(outbox).values({
@@ -423,10 +649,8 @@ async function enqueueCalendarUpsert(
 }
 
 /**
- * Moving one block by hand pins it and cascades everything downstream. This is
- * the "if Phase 15 moves, 16/17/18 move too" path — the cascade itself falls
- * out of the dependency graph during `replan`, so all this has to do is record
- * the new anchor and unpin the dependents.
+ * Moving one block by hand temporarily pins it through the immediate cascade.
+ * It is released afterwards, so only “non spostare questo task” is permanent.
  */
 export async function moveBlock(
   env: Env,
@@ -454,8 +678,18 @@ export async function moveBlock(
       .where(eq(scheduledBlocks.id, blockId));
 
     await enqueueCalendarUpsert(db, userId, blockId, plannerCalendarId);
-    return replan(env, db, userId, 'task_moved');
+    const diff = await replan(env, db, userId, 'task_moved', { confirmed: true });
+    await db
+      .update(scheduledBlocks)
+      .set({ pinned: false })
+      .where(eq(scheduledBlocks.id, blockId));
+    return diff;
   }
+
+  const task = await db.query.tasks.findFirst({
+    where: and(eq(tasks.id, block.taskId), eq(tasks.userId, userId)),
+  });
+  const wasPermanent = task?.pinned ?? false;
 
   /**
    * Dragging one part of a split task moves the whole task, keeping the gaps
@@ -502,7 +736,22 @@ export async function moveBlock(
     .set({ pinned: true, earliestStartAt: earliest })
     .where(eq(tasks.id, block.taskId));
 
-  return replan(env, db, userId, 'task_moved');
+  const diff = await replan(env, db, userId, 'task_moved', { confirmed: true });
+
+  if (!wasPermanent) {
+    await db
+      .update(scheduledBlocks)
+      .set({ pinned: false })
+      .where(
+        and(eq(scheduledBlocks.userId, userId), eq(scheduledBlocks.taskId, block.taskId)),
+      );
+    await db
+      .update(tasks)
+      .set({ pinned: false })
+      .where(and(eq(tasks.id, block.taskId), eq(tasks.userId, userId)));
+  }
+
+  return diff;
 }
 
 /** Releases a manual placement so the scheduler may optimise it again. */

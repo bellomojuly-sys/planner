@@ -83,6 +83,9 @@ export async function syncNotion(
       // resolution, and a missed edit is worse than a redundant one.
       const since = source.lastSyncedAt ? source.lastSyncedAt - 3_600_000 : null;
       const remote = await notion.fetchTasks(env.NOTION_TOKEN, source, since);
+      // A successful pull after an error must publish a fresh plan even when
+      // no remote row changed during the outage.
+      if (source.lastSyncError) report.changed = true;
 
       for (const item of remote) {
         // Meetings already exist as Google Calendar events, and a deadline is
@@ -426,6 +429,7 @@ export async function syncCalendar(
   }
 
   await upsertSyncState(db, userId, calendarId, result.nextSyncToken, null);
+  if (state[0]?.lastError) report.changed = true;
   return report;
 }
 

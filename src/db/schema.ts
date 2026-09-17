@@ -350,7 +350,7 @@ export const tasks = sqliteTable(
     splittable: integer('splittable', { mode: 'boolean' })
       .notNull()
       .default(true),
-    /** Set when Giulia drags a block by hand. The scheduler stops moving it. */
+    /** Set only by an explicit permanent instruction. The scheduler stops moving it. */
     pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
 
     /** Free-text phase label ("Fase 15") used to auto-wire dependency chains. */
@@ -680,7 +680,18 @@ export const scheduleRuns = sqliteTable(
         'dependency_cascade',
       ],
     }).notNull(),
-    status: text('status', { enum: ['running', 'ok', 'partial', 'failed'] })
+    status: text('status', {
+      enum: [
+        'running',
+        'ok',
+        'partial',
+        'failed',
+        'pending_confirmation',
+        'blocked_stale_data',
+        'confirmed',
+        'superseded',
+      ],
+    })
       .notNull()
       .default('running'),
     blocksPlaced: integer('blocks_placed').notNull().default(0),

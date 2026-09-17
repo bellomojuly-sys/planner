@@ -114,8 +114,8 @@ export async function handleCapture(
 
     let replanned = false;
     if (trigger) {
-      await replan(env, db, userId, trigger);
-      replanned = true;
+      const diff = await replan(env, db, userId, trigger);
+      replanned = diff.applied;
     }
 
     const summary = interpretation.summary;
@@ -183,6 +183,8 @@ async function applyIntent(
       return completeTask(env, db, userId, intent);
     case 'move_task':
       return moveTask(db, userId, intent, timezone);
+    case 'set_task_pin':
+      return setTaskPin(db, userId, intent);
     case 'add_dependency':
       return addDependency(db, userId, intent);
     case 'add_shopping_item':
@@ -402,6 +404,48 @@ async function moveTask(
   return {
     message: `Spostata "${task.title}" a ${formatDayLong(earliest, timezone)}`,
     trigger: 'task_moved',
+  };
+}
+
+async function setTaskPin(
+  db: DB,
+  userId: string,
+  intent: Extract<Intent, { kind: 'set_task_pin' }>,
+): Promise<IntentOutcome> {
+  const task = await findTask(db, userId, intent.taskQuery);
+  if (!task) {
+    throw new PlannerError('not_found', {
+      userMessage: `Non ho trovato "${intent.taskQuery}".`,
+    });
+  }
+
+  const blocks = await db
+    .select({ id: scheduledBlocks.id })
+    .from(scheduledBlocks)
+    .where(
+      and(eq(scheduledBlocks.userId, userId), eq(scheduledBlocks.taskId, task.id)),
+    );
+  if (intent.pinned && blocks.length === 0) {
+    throw new PlannerError('bad_request', {
+      userMessage: `"${task.title}" non è ancora nel piano: prima scegli un orario.`,
+    });
+  }
+
+  await db
+    .update(tasks)
+    .set({ pinned: intent.pinned })
+    .where(and(eq(tasks.id, task.id), eq(tasks.userId, userId)));
+  await db
+    .update(scheduledBlocks)
+    .set({ pinned: intent.pinned })
+    .where(
+      and(eq(scheduledBlocks.userId, userId), eq(scheduledBlocks.taskId, task.id)),
+    );
+
+  return {
+    message: intent.pinned
+      ? `"${task.title}" non verrà spostata automaticamente`
+      : `"${task.title}" può essere ripianificata di nuovo`,
   };
 }
 

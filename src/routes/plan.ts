@@ -168,8 +168,47 @@ planRoutes.post('/replan', requireAuth('full'), async (c) => {
   return c.json({ ok: true, diff });
 });
 
+/** Recompute against current data, then apply the result with explicit approval. */
+planRoutes.post('/replan/confirm', requireAuth('full'), async (c) => {
+  const db = c.get('db');
+  const { userId } = c.get('auth');
+  const [pending] = await db
+    .select({ id: scheduleRuns.id, trigger: scheduleRuns.trigger })
+    .from(scheduleRuns)
+    .where(
+      and(
+        eq(scheduleRuns.userId, userId),
+        eq(scheduleRuns.status, 'pending_confirmation'),
+      ),
+    )
+    .orderBy(desc(scheduleRuns.startedAt))
+    .limit(1);
+  if (!pending) {
+    throw new PlannerError('bad_request', {
+      userMessage: 'Non c’è un replan in attesa di conferma.',
+    });
+  }
+
+  const diff = await replan(
+    c.env,
+    db,
+    userId,
+    pending.trigger,
+    { confirmed: true },
+  );
+  if (diff.applied) {
+    await db
+      .update(scheduleRuns)
+      .set({ status: 'confirmed', finishedAt: Date.now() })
+      .where(eq(scheduleRuns.id, pending.id));
+  }
+  await drainOutbox(c.env, db);
+  return c.json({ ok: true, diff });
+});
+
 /**
- * Manual drag. Pins the block and cascades dependents — the core of
+ * Manual drag. Keeps the chosen placement through its immediate cascade, then
+ * releases it for later replans. Only an explicit permanent instruction pins.
  * "if Phase 15 moves, 16, 17 and 18 move accordingly".
  */
 planRoutes.patch('/blocks/:id', requireAuth('full'), async (c) => {

@@ -46,7 +46,8 @@ export interface UnplacedTask {
     | 'no_free_time'
     | 'blocked_by_dependency'
     | 'past_due_window'
-    | 'cycle';
+    | 'cycle'
+    | 'pinned_conflict';
   detail?: string;
 }
 

@@ -52,6 +52,12 @@ const IntentSchema = z.discriminatedUnion('kind', [
     shiftDays: z.number().int().min(-30).max(90).optional(),
   }),
   z.object({
+    kind: z.literal('set_task_pin'),
+    taskQuery: z.string(),
+    /** True for “non spostare”, false when Giulia releases it again. */
+    pinned: z.boolean(),
+  }),
+  z.object({
     kind: z.literal('add_dependency'),
     taskQuery: z.string(),
     dependsOnQuery: z.string(),
@@ -89,6 +95,11 @@ const ResponseSchema = z.object({
 
 export type Interpretation = z.infer<typeof ResponseSchema>;
 
+/** Exported for contract tests without making a paid Anthropic request. */
+export function validateInterpretation(value: unknown) {
+  return ResponseSchema.safeParse(value);
+}
+
 /**
  * Hand-written rather than generated from the zod schema: structured outputs
  * rejects several JSON Schema keywords zod emits (string/number constraints),
@@ -118,6 +129,7 @@ const JSON_SCHEMA = {
               'create_task',
               'complete_task',
               'move_task',
+              'set_task_pin',
               'add_dependency',
               'add_shopping_item',
               'complete_shopping_item',
@@ -148,6 +160,7 @@ const JSON_SCHEMA = {
           actualMinutes: { type: 'integer' },
           moveTo: { type: 'string' },
           shiftDays: { type: 'integer' },
+          pinned: { type: 'boolean' },
           dependsOnQuery: { type: 'string' },
           name: { type: 'string' },
           quantity: { type: 'number' },
@@ -180,6 +193,8 @@ COME INTERPRETARE
 - Una frase può contenere più azioni: restituiscile tutte, nell'ordine in cui sono state dette.
 - "ho finito X", "fatto X", "X è a posto" → complete_task. Se dice quanto ci ha messo ("ci ho messo un'ora"), compila actualMinutes.
 - "sposta X a domani", "X lo faccio giovedì" → move_task.
+- "non spostare X", "X deve restare qui" → set_task_pin con pinned true.
+- "puoi spostare di nuovo X", "sblocca X" → set_task_pin con pinned false.
 - "prima di X devo fare Y", "X dipende da Y" → add_dependency.
 - "compra X", "finito il latte", "serve X" → add_shopping_item.
 - "preso il pane", "comprato X" → complete_shopping_item.
@@ -270,7 +285,7 @@ export async function interpretUtterance(
         });
       }
 
-      const parsed = ResponseSchema.safeParse(JSON.parse(textBlock.text));
+      const parsed = validateInterpretation(JSON.parse(textBlock.text));
       if (!parsed.success) {
         // Structured outputs makes this near-impossible, but a schema drift
         // should surface as a clear error rather than a silent bad write.

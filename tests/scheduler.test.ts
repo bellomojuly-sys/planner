@@ -527,6 +527,89 @@ describe('pinned work', () => {
     const other = result.blocks.find((b) => b.taskId === 'other')!;
     expect(other.start < pinned.end && pinned.start < other.end).toBe(false);
   });
+
+  it('does not publish a permanent task over a fixed commitment', () => {
+    const pinnedStart = MONDAY + 4 * 3_600_000;
+    const pinned = {
+      taskId: 'permanent',
+      title: 'Non spostare questo task',
+      start: pinnedStart,
+      end: pinnedStart + 3_600_000,
+      kind: 'task' as const,
+      zone: 'morning' as const,
+      partIndex: 0,
+      partCount: 1,
+      zoneCompromised: false,
+    };
+
+    const result = schedule({
+      now: MONDAY,
+      horizonEnd: MONDAY + 3 * 86_400_000,
+      timezone: TZ,
+      settings,
+      tasks: [task({ id: 'permanent', pinned: true })],
+      dependencies: new Map(),
+      busy: [{ start: pinnedStart + 15 * 60_000, end: pinned.end + 60_000 }],
+      pinnedBlocks: [pinned],
+    });
+
+    expect(result.blocks.some((block) => block.taskId === 'permanent')).toBe(false);
+    expect(result.unplaced).toContainEqual(
+      expect.objectContaining({ taskId: 'permanent', reason: 'pinned_conflict' }),
+    );
+    expect(result.warnings.join(' ')).toMatch(/permanente/i);
+  });
+
+  it('removes every part of a permanent split task when one part conflicts', () => {
+    const firstStart = MONDAY + 2 * 3_600_000;
+    const secondStart = MONDAY + 5 * 3_600_000;
+    const pinned = [firstStart, secondStart].map((start, partIndex) => ({
+      taskId: 'split-permanent',
+      title: 'Task permanente diviso',
+      start,
+      end: start + 45 * 60_000,
+      kind: 'task' as const,
+      zone: 'morning' as const,
+      partIndex,
+      partCount: 2,
+      zoneCompromised: false,
+    }));
+
+    const result = schedule({
+      now: MONDAY,
+      horizonEnd: MONDAY + 3 * 86_400_000,
+      timezone: TZ,
+      settings,
+      tasks: [task({ id: 'split-permanent', pinned: true })],
+      dependencies: new Map(),
+      busy: [{ start: firstStart, end: firstStart + 30 * 60_000 }],
+      pinnedBlocks: pinned,
+    });
+
+    expect(result.blocks.some((block) => block.taskId === 'split-permanent')).toBe(false);
+    expect(result.unplaced.filter((item) => item.taskId === 'split-permanent')).toHaveLength(1);
+  });
+
+  it('keeps reporting a permanent task after its conflicting block is removed', () => {
+    const result = schedule({
+      now: MONDAY,
+      horizonEnd: MONDAY + 3 * 86_400_000,
+      timezone: TZ,
+      settings,
+      tasks: [task({ id: 'still-permanent', pinned: true })],
+      dependencies: new Map(),
+      busy: [],
+      pinnedBlocks: [],
+    });
+
+    expect(result.blocks.some((block) => block.taskId === 'still-permanent')).toBe(false);
+    expect(result.unplaced).toContainEqual(
+      expect.objectContaining({
+        taskId: 'still-permanent',
+        reason: 'pinned_conflict',
+      }),
+    );
+  });
 });
 
 describe('rescheduling when a fixed commitment moves', () => {

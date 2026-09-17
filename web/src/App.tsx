@@ -116,7 +116,7 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
         ? {
             ...p,
             blocks: p.blocks.map((b) =>
-              b.id === blockId ? { ...b, start, end, pinned: true } : b,
+              b.id === blockId ? { ...b, start, end } : b,
             ),
           }
         : p,
@@ -154,6 +154,18 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
     }
   }
 
+  async function confirmReplan() {
+    try {
+      const { data } = await api.post<{ diff: { applied: boolean } }>(
+        '/plan/replan/confirm',
+      );
+      setNotice(data.diff.applied ? 'Replan confermato e applicato.' : 'Il piano non è cambiato.');
+      await loadPlan();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Non sono riuscita ad applicare il replan.');
+    }
+  }
+
   useEffect(() => {
     if (!notice) return;
     const id = setTimeout(() => setNotice(null), 5000);
@@ -168,6 +180,11 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
         : sameDay(event.start, day),
     ) ?? [];
   const unplaced = plan?.lastRun?.summary?.unplaced ?? [];
+  const pendingConfirmation =
+    plan?.lastRun?.status === 'pending_confirmation'
+      ? plan.lastRun.summary
+      : null;
+  const staleData = plan?.lastRun?.status === 'blocked_stale_data';
 
   return (
     <div className="app">
@@ -220,12 +237,39 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
             {notice}
           </div>
         )}
+        {staleData && (
+          <div className="banner" data-tone="warn" role="status">
+            Il piano non è stato aggiornato: Notion o Google Calendar non sono
+            sincronizzati. Stai vedendo l’ultimo piano valido.
+          </div>
+        )}
+        {pendingConfirmation && (
+          <div className="banner" data-tone="warn" role="alert">
+            <div>
+              Il nuovo piano richiede la tua conferma.{' '}
+              {pendingConfirmation.confirmationReasons?.includes('permanent_task_conflict')
+                ? 'Un task permanente è in conflitto con un impegno fisso. Puoi trascinarlo in un altro orario oppure lasciarlo da ricollocare. '
+                : ''}
+              {pendingConfirmation.confirmationReasons?.includes('near_term_change')
+                ? 'Almeno un blocco entro 60 minuti cambierebbe.'
+                : ''}
+            </div>
+            <button className="btn" onClick={() => void confirmReplan()}>
+              {pendingConfirmation.confirmationReasons?.includes('permanent_task_conflict')
+                ? 'Lascia da ricollocare'
+                : 'Applica il replan'}
+            </button>
+          </div>
+        )}
 
         {view === 'day' && (
           <>
             {unplaced.length > 0 && (
               <div className="banner" data-tone="warn">
-                Non c’è spazio per {unplaced.length}{' '}
+                {unplaced.some((item) => item.reason === 'pinned_conflict')
+                  ? 'Serve una scelta per '
+                  : 'Non c’è spazio per '}
+                {unplaced.length}{' '}
                 {unplaced.length === 1 ? 'attività' : 'attività'}:{' '}
                 {unplaced.map((u) => u.title).join(', ')}.
               </div>

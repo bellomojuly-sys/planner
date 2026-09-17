@@ -48,9 +48,11 @@ export async function handleScheduled(env: Env): Promise<void> {
         console.warn(`[cron] sync issues for ${user.id}: ${errors.join(' | ')}`);
       }
 
-      // 3. Only replan when something actually moved. A no-op replan every
-      //    five minutes would rewrite calendar events for no reason.
-      if (notionReport.changed || calendarReport.changed) {
+      // 3. A failed required sync leaves the last valid plan untouched. When
+      //    both pulls succeed, only replan if something actually moved.
+      if (errors.length > 0) {
+        await replan(env, db, user.id, 'cron', { syncErrors: errors });
+      } else if (notionReport.changed || calendarReport.changed) {
         const trigger = calendarReport.changed ? 'calendar_change' : 'cron';
         await replan(env, db, user.id, trigger);
       }

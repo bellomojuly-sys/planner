@@ -167,7 +167,7 @@ settingsRoutes.post('/sources', requireAuth('full'), async (c) => {
     .returning();
 
   const report = await syncNotion(c.env, db, userId);
-  await replan(c.env, db, userId, 'manual');
+  await replan(c.env, db, userId, 'manual', { syncErrors: report.errors });
   await drainOutbox(c.env, db);
 
   return c.json({ ok: true, source: created, sync: report });
@@ -253,9 +253,9 @@ settingsRoutes.patch('/google/calendars/:id', requireAuth('full'), async (c) => 
   let diff = null;
   if ((body.role !== undefined || body.enabled !== undefined) && c.env.GOOGLE_REFRESH_TOKEN) {
     sync = await syncCalendars(c.env, db, userId);
-    if (sync.errors.length === 0) {
-      diff = await replan(c.env, db, userId, 'calendar_change');
-    }
+    diff = await replan(c.env, db, userId, 'calendar_change', {
+      syncErrors: sync.errors,
+    });
   }
 
   await drainOutbox(c.env, db);
@@ -271,9 +271,10 @@ settingsRoutes.post('/sync', requireAuth('full'), async (c) => {
     syncCalendars(c.env, db, userId),
   ]);
 
+  const errors = [...notionReport.errors, ...calendarReport.errors];
   const diff =
-    notionReport.changed || calendarReport.changed
-      ? await replan(c.env, db, userId, 'manual')
+    errors.length > 0 || notionReport.changed || calendarReport.changed
+      ? await replan(c.env, db, userId, 'manual', { syncErrors: errors })
       : null;
 
   await drainOutbox(c.env, db);

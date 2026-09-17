@@ -112,7 +112,13 @@ try {
 console.log();
 
 // --- 4. Prossima mossa ----------------------------------------------------
-if (missing.length === 0) {
+if (!secretsReadable) {
+  console.log(`  STATO CREDENZIALI SCONOSCIUTO
+
+    Accedi con:  npx wrangler login
+    Poi rilancia:  npm run status
+`);
+} else if (missing.length === 0) {
   console.log(`  Tutto configurato. Verifica dall'app:
     Impostazioni → Verifica connessioni
   Poi assegna i ruoli ai calendari (busy per turni e lezioni) e collega i

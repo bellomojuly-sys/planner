@@ -119,7 +119,9 @@ report.
 `Actual Time` / `Tempo effettivo` (real time spent),
 `Scheduling Mode` / `Modalita scheduling`, where *Locked* and *Fixed* mean "one
 single session, not splittable". They do not set the manual lock: that comes
-from dragging the block inside the app.
+from an explicit instruction. A drag changes the current placement but a later
+replan may move it again. Only “non spostare questo task” creates a permanent
+pin; “puoi spostare di nuovo questo task” releases it.
 
 `Carriera / ICT` is a dedicated planner area, with its own colour, filter and
 semantic matching.
@@ -252,7 +254,16 @@ something, or an event changes on Google Calendar. The cron runs every 5 minutes
 but **only replans if something actually changed**, so it does not rewrite
 calendar events for nothing.
 
-Blocks moved by hand stay fixed until you unlock them.
+Blocks moved by hand keep the position through the immediate dependency
+cascade, then become movable again on later replans. Only an explicit permanent
+instruction stays pinned.
+
+A replan is applied automatically unless it would change a block starting in
+60 minutes or less, or a permanent task conflicts with a fixed commitment. In
+those cases the current plan remains published and the app asks for confirmation.
+A fixed commitment always wins occupied time: Planner never publishes the
+overlap and leaves the permanent task visibly unplaced until Giulia moves or
+releases it.
 
 ### Briefing and review
 
@@ -298,6 +309,11 @@ anyway and the send is retried with exponential backoff (30 s to 30 min, 6
 attempts). Non-retryable requests, a 400 or a revoked credential, die
 immediately instead of clogging the queue.
 
+Inbound failures are conservative too. If a required Notion or Google Calendar
+sync fails, Planner keeps the last valid plan, stores local captures, and does
+not publish a replan from incomplete input. The first successful recovery sync
+triggers a fresh plan even when no remote row changed during the outage.
+
 The backoff uses *full jitter*: during one cron tick several calls towards Notion
 and Google start together, and without jitter they would all retry in sync,
 hammering a service that is recovering.
@@ -312,7 +328,7 @@ details or external response bodies: those stay in the logs.
 ```bash
 npm run dev              # API (:8787) + front end (:5173) together
 npm run typecheck
-npm test                 # 28 scheduler tests
+npm test                 # 86 tests, 37 on the scheduler
 npm run db:generate      # regenerate migrations after a schema change
 npm run deploy
 ```
