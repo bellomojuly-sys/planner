@@ -167,6 +167,9 @@ export interface SettingsView {
     accessRole: 'freeBusyReader' | 'reader' | 'writer' | 'owner';
     primary: boolean;
     enabled: boolean;
+    kind: 'google' | 'ics';
+    /** Only the host of the feed: the full URL is a credential. */
+    feedUrl: string | null;
   }>;
   accuracy: { samples: number; meanRatio: number; withinTolerance: number };
   integrations: Record<string, boolean>;

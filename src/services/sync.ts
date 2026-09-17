@@ -10,6 +10,7 @@ import {
   settings as settingsTable,
 } from '../db/schema';
 import * as notion from '../integrations/notion';
+import { fetchIcsEvents } from '../integrations/ics';
 import {
   syncEvents,
   isSyncTokenExpired,
@@ -402,7 +403,64 @@ export async function syncCalendar(
     }
   }
 
-  for (const event of result.events) {
+  mergeReport(
+    report,
+    await upsertCalendarEvents(
+      db,
+      userId,
+      calendarId,
+      result.events,
+      role,
+      keywords,
+      calendarSummary,
+    ),
+  );
+
+  await upsertSyncState(db, userId, calendarId, result.nextSyncToken, null);
+  if (state[0]?.lastError) report.changed = true;
+  return report;
+}
+
+/**
+ * All-day events are treated as soft: an all-day "Ferie" should not blank out
+ * the whole day for planning purposes, whereas a timed shift must.
+ */
+export function classifyEvent(
+  event: GoogleEvent,
+  keywords: string[],
+  role: Exclude<CalendarRole, 'ignore'>,
+  calendarSummary = '',
+): { kind: 'fixed' | 'soft'; isShift: boolean } {
+  const haystack = `${event.title} ${event.location ?? ''}`.toLowerCase();
+  const shiftHaystack = `${haystack} ${calendarSummary}`.toLowerCase();
+  const isShift = /turno|ristorante|shift|servizio|eitje/.test(shiftHaystack);
+
+  // An explicit Google "free" event and an all-day marker are useful context
+  // but must not erase an entire planning day. A context calendar is likewise
+  // visible without contributing to the busy mask.
+  if (role === 'context' || event.transparent || event.allDay) {
+    return { kind: 'soft', isShift };
+  }
+  return { kind: 'fixed', isShift };
+}
+
+/**
+ * Writes one batch of events into the local mirror, whatever produced them —
+ * a Google sync or an ICS feed. Both need the same classification, the same
+ * content hash and the same "our own blocks are not commitments" rule.
+ */
+export async function upsertCalendarEvents(
+  db: DB,
+  userId: string,
+  calendarId: string,
+  events: GoogleEvent[],
+  role: Exclude<CalendarRole, 'ignore'>,
+  keywords: string[],
+  calendarSummary = '',
+): Promise<SyncReport> {
+  const report = emptyReport();
+
+  for (const event of events) {
     // Our own planner blocks come back on the feed; ignoring them here is what
     // stops the scheduler treating yesterday's plan as immovable.
     if (event.isPlannerBlock) continue;
@@ -487,32 +545,96 @@ export async function syncCalendar(
     report.changed = true;
   }
 
-  await upsertSyncState(db, userId, calendarId, result.nextSyncToken, null);
-  if (state[0]?.lastError) report.changed = true;
   return report;
 }
 
 /**
- * All-day events are treated as soft: an all-day "Ferie" should not blank out
- * the whole day for planning purposes, whereas a timed shift must.
+ * A feed carries the whole calendar every time, so the snapshot it returns is
+ * the truth: events it no longer lists have been deleted upstream. There is no
+ * sync token to keep, only the last error.
  */
-export function classifyEvent(
-  event: GoogleEvent,
-  keywords: string[],
-  role: Exclude<CalendarRole, 'ignore'>,
-  calendarSummary = '',
-): { kind: 'fixed' | 'soft'; isShift: boolean } {
-  const haystack = `${event.title} ${event.location ?? ''}`.toLowerCase();
-  const shiftHaystack = `${haystack} ${calendarSummary}`.toLowerCase();
-  const isShift = /turno|ristorante|shift|servizio|eitje/.test(shiftHaystack);
-
-  // An explicit Google "free" event and an all-day marker are useful context
-  // but must not erase an entire planning day. A context calendar is likewise
-  // visible without contributing to the busy mask.
-  if (role === 'context' || event.transparent || event.allDay) {
-    return { kind: 'soft', isShift };
+export async function syncIcsCalendar(
+  env: Env,
+  db: DB,
+  userId: string,
+  source: typeof calendarSources.$inferSelect,
+): Promise<SyncReport> {
+  const report = emptyReport();
+  if (!source.feedUrl) {
+    report.errors.push(`${source.summary}: indirizzo del calendario mancante.`);
+    return report;
   }
-  return { kind: 'fixed', isShift };
+
+  const prefs = await db.query.settings.findFirst({
+    where: eq(settingsTable.userId, userId),
+  });
+  const horizonDays = prefs?.planningHorizonDays ?? 14;
+  const from = Date.now() - DAY_MS;
+  const to = Date.now() + (horizonDays + 7) * DAY_MS;
+
+  let parsed;
+  try {
+    parsed = await fetchIcsEvents(source.feedUrl, env.APP_TIMEZONE);
+  } catch (err) {
+    const pe = toPlannerError(err);
+    report.errors.push(`${source.summary}: ${pe.userMessage}`);
+    await upsertSyncState(db, userId, source.calendarId, null, pe.message);
+    return report;
+  }
+
+  // Only the planning window matters, and keeping the rest out of D1 is what
+  // holds a year-long university feed inside the per-invocation query limit.
+  const inWindow = parsed.events.filter((e) => e.endAt >= from && e.startAt <= to);
+
+  const keywords = (prefs?.fixedEventKeywords ?? '')
+    .split(',')
+    .map((k) => k.trim().toLowerCase())
+    .filter(Boolean);
+
+  const upserted = await upsertCalendarEvents(
+    db,
+    userId,
+    source.calendarId,
+    inWindow,
+    source.role as Exclude<CalendarRole, 'ignore'>,
+    keywords,
+    source.summary,
+  );
+  mergeReport(report, upserted);
+
+  // Anything local that the feed no longer lists inside the window is gone.
+  const seen = new Set(inWindow.map((e) => e.externalId));
+  const local = await db
+    .select({ id: calendarEvents.id, externalId: calendarEvents.externalId })
+    .from(calendarEvents)
+    .where(
+      and(
+        eq(calendarEvents.userId, userId),
+        eq(calendarEvents.calendarId, source.calendarId),
+        gte(calendarEvents.endAt, from),
+      ),
+    );
+  const stale = local.filter((e) => !seen.has(e.externalId)).map((e) => e.id);
+  for (let i = 0; i < stale.length; i += 90) {
+    await db.delete(calendarEvents).where(inArray(calendarEvents.id, stale.slice(i, i + 90)));
+    report.eventsRemoved += Math.min(90, stale.length - i);
+    report.changed = true;
+  }
+
+  const state = await db
+    .select()
+    .from(calendarSyncState)
+    .where(
+      and(
+        eq(calendarSyncState.userId, userId),
+        eq(calendarSyncState.calendarId, source.calendarId),
+      ),
+    )
+    .limit(1);
+  if (state[0]?.lastError) report.changed = true;
+  await upsertSyncState(db, userId, source.calendarId, null, null);
+
+  return report;
 }
 
 /** Sync every configured calendar and return one report to the caller. */
@@ -534,6 +656,12 @@ export async function syncCalendars(
 
   for (const source of configured) {
     if (!source.enabled || source.role === 'ignore') continue;
+
+    if (source.kind === 'ics') {
+      mergeReport(report, await syncIcsCalendar(env, db, userId, source));
+      continue;
+    }
+
     const one = await syncCalendar(
       env,
       db,

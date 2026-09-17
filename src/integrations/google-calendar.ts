@@ -6,7 +6,9 @@ import type { Env } from '../env';
  * Google Calendar over raw REST. The `googleapis` package is far too heavy for
  * a Worker, and the four endpoints we need are stable.
  *
- * Auth is a long-lived refresh token exchanged for short-lived access tokens.
+ * Auth is either a service-account key (preferred: it never expires, and the
+ * calendars are shared with the account's address) or the older OAuth refresh
+ * token. Both end in a short-lived access token, cached in KV.
  * Nothing Google-related ever reaches the browser.
  */
 
@@ -36,12 +38,110 @@ export function cleanSecret(value: string | undefined): string {
   return (value ?? '').trim().replace(/^(["'])(.*)\1$/s, '$2').trim();
 }
 
+export interface ServiceAccountKey {
+  client_email: string;
+  private_key: string;
+}
+
+/** Parses the downloaded key file, or explains what is wrong with it. */
+export function parseServiceAccount(raw: string | undefined): ServiceAccountKey | null {
+  const text = cleanSecret(raw);
+  if (!text) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new PlannerError('config_missing', {
+      message: 'service account key is not valid json',
+      userMessage:
+        'La chiave del service account non è un file JSON valido. Ricaricala come è stata scaricata da Google.',
+      retryable: false,
+    });
+  }
+
+  const key = parsed as Partial<ServiceAccountKey>;
+  if (!key.client_email || !key.private_key) {
+    throw new PlannerError('config_missing', {
+      message: 'service account key missing client_email or private_key',
+      userMessage:
+        'Alla chiave del service account mancano client_email o private_key.',
+      retryable: false,
+    });
+  }
+  // A key pasted through a shell or an env file arrives with literal \n.
+  return {
+    client_email: key.client_email,
+    private_key: key.private_key.replace(/\\n/g, '\n'),
+  };
+}
+
+function base64url(bytes: ArrayBuffer | string): string {
+  const raw =
+    typeof bytes === 'string'
+      ? bytes
+      : String.fromCharCode(...new Uint8Array(bytes));
+  return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/** Claims for the JWT a service account exchanges for an access token. */
+export function serviceAccountClaims(
+  clientEmail: string,
+  nowMs: number,
+): Record<string, string | number> {
+  const iat = Math.floor(nowMs / 1000);
+  return {
+    iss: clientEmail,
+    scope: GOOGLE_SCOPES.join(' '),
+    aud: TOKEN_URL,
+    iat,
+    // Google rejects anything longer than an hour.
+    exp: iat + 3600,
+  };
+}
+
+/** PEM (`-----BEGIN PRIVATE KEY-----`) to the DER bytes WebCrypto imports. */
+export function pemToPkcs8(pem: string): ArrayBuffer {
+  const body = pem
+    .replace(/-----(BEGIN|END) PRIVATE KEY-----/g, '')
+    .replace(/\s+/g, '');
+  const binary = atob(body);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out.buffer;
+}
+
+async function signedJwt(key: ServiceAccountKey): Promise<string> {
+  const cryptoKey = await crypto.subtle.importKey(
+    'pkcs8',
+    pemToPkcs8(key.private_key),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+
+  const payload = `${base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${base64url(
+    JSON.stringify(serviceAccountClaims(key.client_email, Date.now())),
+  )}`;
+
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    cryptoKey,
+    new TextEncoder().encode(payload),
+  );
+
+  return `${payload}.${base64url(signature)}`;
+}
+
 async function getAccessToken(env: Env): Promise<string> {
   const cached = await env.CACHE.get<CachedToken>('google:access_token', 'json');
   // 60s safety margin so a token cannot expire mid-request.
   if (cached && cached.expiresAt > Date.now() + 60_000) {
     return cached.accessToken;
   }
+
+  const serviceAccount = parseServiceAccount(env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  if (serviceAccount) return exchangeJwt(env, serviceAccount);
 
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REFRESH_TOKEN) {
     throw new PlannerError('config_missing', {
@@ -69,6 +169,43 @@ async function getAccessToken(env: Env): Promise<string> {
     { label: 'google.token', attempts: 3 },
   );
 
+  await cacheAccessToken(env, token);
+
+  return token.access_token;
+}
+
+/**
+ * Service-account flow: a JWT we sign ourselves becomes an access token. No
+ * consent screen and nothing to renew — Google grants exactly the calendars
+ * shared with the account's address.
+ */
+async function exchangeJwt(env: Env, key: ServiceAccountKey): Promise<string> {
+  const assertion = await signedJwt(key);
+
+  const token = await withRetry(
+    async () => {
+      const res = await fetchWithTimeout(TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+          assertion,
+        }),
+      });
+      await assertOk(res, 'google.token');
+      return (await res.json()) as { access_token: string; expires_in: number };
+    },
+    { label: 'google.token', attempts: 3 },
+  );
+
+  await cacheAccessToken(env, token);
+  return token.access_token;
+}
+
+async function cacheAccessToken(
+  env: Env,
+  token: { access_token: string; expires_in: number },
+): Promise<void> {
   await env.CACHE.put(
     'google:access_token',
     JSON.stringify({
@@ -77,8 +214,6 @@ async function getAccessToken(env: Env): Promise<string> {
     }),
     { expirationTtl: Math.max(60, token.expires_in - 120) },
   );
-
-  return token.access_token;
 }
 
 async function calFetch<T>(

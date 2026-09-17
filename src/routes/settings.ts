@@ -20,6 +20,8 @@ import {
   discoverCalendarSources,
   loadCalendarSources,
   updateCalendarSource,
+  addIcsSource,
+  redactSource,
 } from '../services/calendar-sources';
 import { drainOutbox } from '../services/outbox';
 import { estimateAccuracy } from '../scheduler/estimate';
@@ -48,7 +50,7 @@ settingsRoutes.get('/', async (c) => {
   return c.json({
     settings: prefs,
     sources,
-    calendars,
+    calendars: calendars.map(redactSource),
     accuracy,
     integrations: {
       notion: Boolean(c.env.NOTION_TOKEN),
@@ -218,7 +220,29 @@ settingsRoutes.get('/google/calendars', requireAuth('full'), async (c) => {
     c.get('db'),
     c.get('auth').userId,
   );
-  return c.json({ calendars });
+  return c.json({ calendars: calendars.map(redactSource) });
+});
+
+settingsRoutes.post('/calendars/ics', requireAuth('full'), async (c) => {
+  const body = z
+    .object({
+      url: z.string().min(8),
+      name: z.string().min(1).max(60),
+      role: z.enum(['busy', 'context', 'ignore']).default('busy'),
+    })
+    .parse(await c.req.json());
+
+  const db = c.get('db');
+  const { userId } = c.get('auth');
+  const calendar = await addIcsSource(db, userId, body);
+
+  const sync = await syncCalendars(c.env, db, userId);
+  const diff = await replan(c.env, db, userId, 'calendar_change', {
+    syncErrors: sync.errors,
+  });
+  await drainOutbox(c.env, db);
+
+  return c.json({ ok: true, calendar: redactSource(calendar), sync, diff });
 });
 
 settingsRoutes.post('/google/calendars/discover', requireAuth('full'), async (c) => {
@@ -251,7 +275,7 @@ settingsRoutes.patch('/google/calendars/:id', requireAuth('full'), async (c) => 
 
   let sync = null;
   let diff = null;
-  if ((body.role !== undefined || body.enabled !== undefined) && c.env.GOOGLE_REFRESH_TOKEN) {
+  if (body.role !== undefined || body.enabled !== undefined) {
     sync = await syncCalendars(c.env, db, userId);
     diff = await replan(c.env, db, userId, 'calendar_change', {
       syncErrors: sync.errors,
@@ -259,7 +283,12 @@ settingsRoutes.patch('/google/calendars/:id', requireAuth('full'), async (c) => 
   }
 
   await drainOutbox(c.env, db);
-  return c.json({ ok: true, calendar, sync, diff });
+  return c.json({
+    ok: true,
+    calendar: calendar ? redactSource(calendar) : null,
+    sync,
+    diff,
+  });
 });
 
 settingsRoutes.post('/sync', requireAuth('full'), async (c) => {

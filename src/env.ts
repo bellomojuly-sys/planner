@@ -11,6 +11,11 @@ export interface Env {
   MASTER_KEY: string;
   DEEPSEEK_API_KEY?: string;
   NOTION_TOKEN?: string;
+  /**
+   * Service-account key file, as downloaded from Google Cloud. Preferred over
+   * the OAuth trio: its credentials do not expire, so no weekly reconnect.
+   */
+  GOOGLE_SERVICE_ACCOUNT_JSON?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_REFRESH_TOKEN?: string;

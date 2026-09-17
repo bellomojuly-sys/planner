@@ -513,6 +513,16 @@ export const calendarSources = sqliteTable(
     calendarId: text('calendar_id').notNull(),
     summary: text('summary').notNull(),
     /**
+     * `google` — a calendar in the connected Google account.
+     * `ics`    — a feed Planner subscribes to by URL, because Google refuses
+     *            to share subscribed calendars with anyone.
+     */
+    kind: text('kind', { enum: ['google', 'ics'] })
+      .notNull()
+      .default('google'),
+    /** Set for `ics` sources. A bearer credential: never show it in full. */
+    feedUrl: text('feed_url'),
+    /**
      * `busy`    — its events are immovable; the scheduler works around them.
      * `context` — shown in the app and the briefing, but does not block time.
      * `ignore`  — not read at all.

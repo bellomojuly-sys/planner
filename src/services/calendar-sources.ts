@@ -11,6 +11,7 @@ import {
   listCalendars,
   type GoogleCalendar,
 } from '../integrations/google-calendar';
+import { isLikelyIcsUrl, normalizeFeedUrl } from '../integrations/ics';
 import { PlannerError } from '../lib/errors';
 import type { Env } from '../env';
 
@@ -35,6 +36,76 @@ export function suggestCalendarRole(
     return 'planner';
   }
   return 'busy';
+}
+
+/**
+ * The feed URL is the credential: anyone holding it can read the calendar, so
+ * the API returns only enough of it to recognise which feed a row is.
+ */
+export function redactFeedUrl(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'feed';
+  }
+}
+
+export function redactSource<T extends { feedUrl: string | null }>(source: T) {
+  return { ...source, feedUrl: redactFeedUrl(source.feedUrl) };
+}
+
+/**
+ * Subscribes to a calendar Planner reads by URL. Google cannot share these
+ * with anyone (see `dl-how-planner-reads-subscribed-calendars`), so they are
+ * registered here instead of discovered.
+ */
+export async function addIcsSource(
+  db: DB,
+  userId: string,
+  input: { url: string; name: string; role: CalendarRole },
+) {
+  if (!isLikelyIcsUrl(input.url)) {
+    throw new PlannerError('bad_request', {
+      message: 'not an http(s) calendar url',
+      userMessage: 'Indirizzo non valido. Incolla il link iCal (https:// o webcal://).',
+    });
+  }
+
+  const url = normalizeFeedUrl(input.url);
+  // Stable id derived from the URL: re-adding the same feed updates the row
+  // instead of duplicating the calendar.
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(url));
+  const calendarId = `ics:${[...new Uint8Array(digest)]
+    .slice(0, 8)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')}`;
+
+  const [row] = await db
+    .insert(calendarSources)
+    .values({
+      userId,
+      calendarId,
+      summary: input.name.trim() || 'Calendario esterno',
+      kind: 'ics',
+      feedUrl: url,
+      role: input.role,
+      accessRole: 'reader',
+      enabled: true,
+    })
+    .onConflictDoUpdate({
+      target: [calendarSources.userId, calendarSources.calendarId],
+      set: {
+        summary: input.name.trim() || 'Calendario esterno',
+        feedUrl: url,
+        role: input.role,
+        enabled: true,
+        updatedAt: Date.now(),
+      },
+    })
+    .returning();
+
+  return row!;
 }
 
 export async function discoverCalendarSources(

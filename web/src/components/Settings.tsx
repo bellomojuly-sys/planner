@@ -209,11 +209,13 @@ export function Settings({ onChanged }: { onChanged: () => void }) {
       </div>
 
       <div className="card">
-        <h2>Calendari Google</h2>
+        <h2>Calendari</h2>
         <p className="list__meta">
           Gli impegni fissi bloccano il tempo; i calendari di contesto restano
           visibili senza togliere spazio alle attività. Un solo calendario riceve
-          i blocchi creati dal planner.
+          i blocchi creati dal planner. I calendari a cui sei iscritta (turni
+          eitje, scadenze università) si aggiungono con il loro indirizzo iCal:
+          Google non permette di condividerli.
         </p>
         <GoogleCalendars
           calendars={data.calendars}
@@ -486,6 +488,92 @@ const CALENDAR_ROLE_LABELS = {
   planner: 'Destinazione planner',
 } as const;
 
+/**
+ * A subscribed calendar is registered by URL rather than discovered: Google
+ * refuses to share those, so Planner reads the feed itself. The address never
+ * comes back from the server, only its host.
+ */
+function AddIcsCalendar({
+  onAdded,
+  onChanged,
+}: {
+  onAdded: () => Promise<void>;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState('');
+  const [name, setName] = useState('');
+  const [role, setRole] = useState<'busy' | 'context'>('busy');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!open) {
+    return (
+      <button className="btn" onClick={() => setOpen(true)}>
+        Aggiungi calendario iscritto
+      </button>
+    );
+  }
+
+  return (
+    <form
+      className="stack"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        setError(null);
+        try {
+          await api.post('/settings/calendars/ics', { url, name, role });
+          setUrl('');
+          setName('');
+          setOpen(false);
+          await onAdded();
+          onChanged();
+        } catch (err) {
+          setError(err instanceof ApiError ? err.message : 'Calendario non aggiunto.');
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {error && (
+        <div className="banner" data-tone="error">
+          {error}
+        </div>
+      )}
+      <input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="Nome (es. Turni eitje)"
+        required
+      />
+      <input
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        placeholder="Indirizzo iCal (https://…)"
+        type="url"
+        required
+      />
+      <select value={role} onChange={(e) => setRole(e.target.value as 'busy' | 'context')}>
+        <option value="busy">Impegno fisso — blocca il tempo</option>
+        <option value="context">Contesto — solo visibile (scadenze)</option>
+      </select>
+      <p className="list__meta">
+        L’indirizzo vale come una password: chi ce l’ha legge il calendario.
+        Resta sul server, l’app non lo mostra più.
+      </p>
+      <div className="row">
+        <button className="btn" type="submit" disabled={busy}>
+          {busy ? 'Aggiungo…' : 'Aggiungi'}
+        </button>
+        <button className="btn" type="button" onClick={() => setOpen(false)}>
+          Annulla
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function GoogleCalendars({
   calendars,
   onReload,
@@ -543,6 +631,9 @@ function GoogleCalendars({
                 <div className="list__main">
                   <div className="list__title">
                     {calendar.summary}
+                    {calendar.kind === 'ics' && (
+                      <span className="block__badge">iscritto</span>
+                    )}
                     {calendar.primary && <span className="block__badge">principale</span>}
                   </div>
                   <div className="list__meta">
@@ -586,6 +677,8 @@ function GoogleCalendars({
           })}
         </ul>
       )}
+
+      <AddIcsCalendar onAdded={onReload} onChanged={onChanged} />
 
       <button
         className="btn"
