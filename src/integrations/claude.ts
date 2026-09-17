@@ -8,16 +8,15 @@ import type { Env } from '../env';
 /**
  * Turns a spoken Italian sentence into structured intents.
  *
- * Runs at `effort: 'low'` with adaptive thinking left on. These utterances are
- * short and the schema is tight, so extra reasoning depth buys nothing —
- * and lowering effort is the cheaper lever than disabling thinking, which on
- * this model can leak internal tags into the output.
+ * Runs on Haiku 4.5 without thinking, the cheapest current model. These
+ * utterances are short and the schema is tight, so extra reasoning depth buys
+ * nothing. Haiku 4.5 rejects `effort`, so it is not sent.
  *
  * Structured outputs (rather than prose parsing) means a malformed response is
  * impossible: the API constrains generation to the schema.
  */
 
-const MODEL = 'claude-opus-5';
+export const MODEL = 'claude-haiku-4-5';
 
 // ---------------------------------------------------------------------------
 // Intent shapes
@@ -248,9 +247,7 @@ export async function interpretUtterance(
         response = await client.messages.create({
           model: MODEL,
           max_tokens: 4096,
-          thinking: { type: 'adaptive' },
           output_config: {
-            effort: 'low',
             format: { type: 'json_schema', schema: JSON_SCHEMA },
           },
           system: buildSystemPrompt(context),
@@ -350,8 +347,6 @@ export async function composeBriefing(
         response = await client.messages.create({
           model: MODEL,
           max_tokens: 1200,
-          thinking: { type: 'adaptive' },
-          output_config: { effort: 'low' },
           system:
             'Sei l’assistente di pianificazione di Giulia. Scrivi in italiano, in seconda persona, con tono diretto e caldo. Massimo 120 parole. Vai al punto: cosa conta oggi, cosa può slittare. Niente elenchi puntati se non servono davvero, niente preamboli.',
           messages: [{ role: 'user', content: prompt }],

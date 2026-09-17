@@ -1,3 +1,4 @@
+import { MODEL as CLAUDE_MODEL } from '../integrations/claude';
 import Anthropic from '@anthropic-ai/sdk';
 import { listCalendars } from '../integrations/google-calendar';
 import { assertOk, fetchWithTimeout } from '../lib/retry';
@@ -47,7 +48,7 @@ async function checkClaude(env: Env): Promise<IntegrationCheck> {
   try {
     const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 1 });
     // Retrieving a model validates the key without spending any tokens.
-    const model = await client.models.retrieve('claude-opus-5');
+    const model = await client.models.retrieve(CLAUDE_MODEL);
     return {
       service: 'claude',
       state: 'ok',
