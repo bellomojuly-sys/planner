@@ -1,8 +1,7 @@
-import { MODEL as CLAUDE_MODEL } from '../integrations/claude';
-import Anthropic from '@anthropic-ai/sdk';
+import { DEEPSEEK_BASE_URL, MODEL as LLM_MODEL } from '../integrations/llm';
 import { listCalendars } from '../integrations/google-calendar';
 import { assertOk, fetchWithTimeout } from '../lib/retry';
-import { toPlannerError } from '../lib/errors';
+import { PlannerError, toPlannerError } from '../lib/errors';
 import type { Env } from '../env';
 
 /**
@@ -19,7 +18,7 @@ import type { Env } from '../env';
 export type CheckState = 'ok' | 'missing' | 'error';
 
 export interface IntegrationCheck {
-  service: 'claude' | 'notion' | 'google' | 'push';
+  service: 'voice' | 'notion' | 'google' | 'push';
   state: CheckState;
   /** Italian, safe to show. Never contains the credential itself. */
   detail: string;
@@ -29,33 +28,41 @@ export async function checkIntegrations(env: Env): Promise<IntegrationCheck[]> {
   // Run them together: three sequential network probes make the settings
   // screen feel broken even when everything is fine.
   return Promise.all([
-    checkClaude(env),
+    checkVoice(env),
     checkNotion(env),
     checkGoogle(env),
     checkPush(env),
   ]);
 }
 
-async function checkClaude(env: Env): Promise<IntegrationCheck> {
-  if (!env.ANTHROPIC_API_KEY) {
+async function checkVoice(env: Env): Promise<IntegrationCheck> {
+  if (!env.DEEPSEEK_API_KEY) {
     return {
-      service: 'claude',
+      service: 'voice',
       state: 'missing',
-      detail: 'Chiave non impostata. Serve per interpretare le note vocali.',
+      detail: 'Chiave DeepSeek non impostata. Serve per interpretare le note vocali.',
     };
   }
 
   try {
-    const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 1 });
-    // Retrieving a model validates the key without spending any tokens.
-    const model = await client.models.retrieve(CLAUDE_MODEL);
+    // Listing models validates the key without spending any tokens.
+    const res = await fetchWithTimeout(
+      `${DEEPSEEK_BASE_URL}/models`,
+      { headers: { Authorization: `Bearer ${env.DEEPSEEK_API_KEY}` } },
+      10_000,
+    );
+    await assertOk(res, 'deepseek.check');
+    const models = ((await res.json()) as { data?: Array<{ id: string }> }).data ?? [];
+    const available = models.some((m) => m.id === LLM_MODEL);
     return {
-      service: 'claude',
-      state: 'ok',
-      detail: `Collegata — ${model.display_name}.`,
+      service: 'voice',
+      state: available ? 'ok' : 'error',
+      detail: available
+        ? `Collegata — DeepSeek ${LLM_MODEL}.`
+        : `Chiave valida, ma il modello ${LLM_MODEL} non è nell’elenco di DeepSeek.`,
     };
   } catch (err) {
-    return { service: 'claude', state: 'error', detail: explain(err) };
+    return { service: 'voice', state: 'error', detail: explain(err) };
   }
 }
 
@@ -163,20 +170,16 @@ async function checkPush(env: Env): Promise<IntegrationCheck> {
  * about them, so they are matched first.
  */
 function explain(err: unknown): string {
-  if (err instanceof Anthropic.AuthenticationError) {
-    return 'Chiave non valida o revocata. Controlla su console.anthropic.com.';
-  }
-  if (err instanceof Anthropic.PermissionDeniedError) {
-    return 'Chiave valida ma senza permessi su questo modello.';
-  }
-  if (err instanceof Anthropic.RateLimitError) {
-    return 'Chiave valida, ma il limite di richieste è stato superato. Riprova fra poco.';
-  }
-  if (err instanceof Anthropic.APIConnectionError) {
-    return 'Impossibile raggiungere il servizio. Problema di rete?';
-  }
-  if (err instanceof Anthropic.APIError) {
-    return `Il servizio ha risposto ${err.status ?? '?'}. Credito esaurito o chiave del progetto sbagliato?`;
+  if (err instanceof PlannerError) {
+    if (err.code === 'config_missing') {
+      return 'Chiave non valida o revocata. Controlla la chiave o l’integrazione.';
+    }
+    if (err.code === 'rate_limited') {
+      return 'Chiave valida, ma il limite di richieste è stato superato. Riprova fra poco.';
+    }
+    if (err.message.includes(': 402')) {
+      return 'Chiave valida, ma il credito è esaurito.';
+    }
   }
   return toPlannerError(err).userMessage;
 }

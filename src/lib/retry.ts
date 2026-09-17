@@ -60,7 +60,7 @@ export async function withRetry<T>(
 
 /**
  * Translates an HTTP response into the error taxonomy. Everything that talks
- * to Notion, Google or Anthropic funnels through here so retry semantics are
+ * to Notion, Google or DeepSeek funnels through here so retry semantics are
  * decided in exactly one place.
  */
 export async function assertOk(res: Response, label: string): Promise<Response> {

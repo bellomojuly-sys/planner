@@ -29,7 +29,7 @@ interface IntegrationCheck {
 }
 
 const LABELS: Record<string, string> = {
-  claude: 'Claude — voce',
+  voice: 'DeepSeek — voce',
   notion: 'Notion — attività',
   google: 'Google Calendar — turni e lezioni',
   push: 'Notifiche',

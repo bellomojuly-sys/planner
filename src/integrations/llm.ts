@@ -1,22 +1,22 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
-import { PlannerError, toPlannerError } from '../lib/errors';
-import { withRetry } from '../lib/retry';
+import { PlannerError } from '../lib/errors';
+import { assertOk, fetchWithTimeout, withRetry } from '../lib/retry';
 import { AREAS, ENERGY } from '../db/schema';
 import type { Env } from '../env';
 
 /**
- * Turns a spoken Italian sentence into structured intents.
+ * Turns a spoken Italian sentence into structured intents, and writes the
+ * daily briefing. Backed by DeepSeek through its OpenAI-format HTTP API.
  *
- * Runs on Haiku 4.5 without thinking, the cheapest current model. These
- * utterances are short and the schema is tight, so extra reasoning depth buys
- * nothing. Haiku 4.5 rejects `effort`, so it is not sent.
+ * Thinking is disabled: these utterances are short and the schema is tight,
+ * so reasoning adds cost and latency without changing the answer.
  *
- * Structured outputs (rather than prose parsing) means a malformed response is
- * impossible: the API constrains generation to the schema.
+ * DeepSeek's JSON mode guarantees valid JSON but not the shape, so the schema
+ * is described in the prompt and every response is re-checked with zod.
  */
 
-export const MODEL = 'claude-haiku-4-5';
+export const MODEL = 'deepseek-flash';
+export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 
 // ---------------------------------------------------------------------------
 // Intent shapes
@@ -94,15 +94,14 @@ const ResponseSchema = z.object({
 
 export type Interpretation = z.infer<typeof ResponseSchema>;
 
-/** Exported for contract tests without making a paid Anthropic request. */
+/** Exported for contract tests without making a paid model request. */
 export function validateInterpretation(value: unknown) {
   return ResponseSchema.safeParse(value);
 }
 
 /**
- * Hand-written rather than generated from the zod schema: structured outputs
- * rejects several JSON Schema keywords zod emits (string/number constraints),
- * and the constraints are re-checked by zod on the way out anyway.
+ * Hand-written rather than generated from the zod schema, so the prompt stays
+ * short and readable. The constraints are re-checked by zod on the way out.
  */
 const JSON_SCHEMA = {
   type: 'object',
@@ -212,7 +211,14 @@ Per ogni create_task stima sempre area, energy, priority ed estimatedMinutes.
 DATE
 Risolvi sempre i riferimenti relativi in date ISO usando la data di oggi. "domani", "venerdì", "fine mese" diventano YYYY-MM-DD.
 
-Non inventare attività che Giulia non ha nominato. Se cita un'attività esistente, riporta in taskQuery le sue parole, non una tua riformulazione.`;
+Non inventare attività che Giulia non ha nominato. Se cita un'attività esistente, riporta in taskQuery le sue parole, non una tua riformulazione.
+
+FORMATO DI RISPOSTA
+Rispondi solo con un oggetto json valido che rispetta questo JSON Schema. Per ogni intent includi "kind" e solo i campi che lo riguardano.
+${JSON.stringify(JSON_SCHEMA)}
+
+Esempio per "ho finito la fattura e compra il latte":
+{"summary":"Segno la fattura come fatta e aggiungo il latte alla spesa.","intents":[{"kind":"complete_task","taskQuery":"la fattura"},{"kind":"add_shopping_item","name":"latte","category":"alimentari"}]}`;
 }
 
 export interface InterpretContext {
@@ -233,100 +239,129 @@ export async function interpretUtterance(
     });
   }
 
-  const client = new Anthropic({
-    apiKey: env.ANTHROPIC_API_KEY,
-    // Retries are handled by withRetry so backoff and error mapping stay in
-    // one place; letting the SDK also retry would multiply the delays.
-    maxRetries: 0,
-  });
-
   return withRetry(
     async () => {
-      let response;
+      const content = await chat(env, 'deepseek.interpret', {
+        max_tokens: 4096,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: buildSystemPrompt(context) },
+          { role: 'user', content: text },
+        ],
+      });
+
+      let json: unknown;
       try {
-        response = await client.messages.create({
-          model: MODEL,
-          max_tokens: 4096,
-          output_config: {
-            format: { type: 'json_schema', schema: JSON_SCHEMA },
-          },
-          system: buildSystemPrompt(context),
-          messages: [{ role: 'user', content: text }],
-        });
-      } catch (err) {
-        throw mapAnthropicError(err);
-      }
-
-      if (response.stop_reason === 'refusal') {
+        json = JSON.parse(content);
+      } catch {
         throw new PlannerError('upstream_rejected', {
-          message: 'claude refused',
-          userMessage:
-            'Non sono riuscita a interpretare questa richiesta. Prova a riformularla.',
-          retryable: false,
-        });
-      }
-
-      if (response.stop_reason === 'max_tokens') {
-        throw new PlannerError('upstream_rejected', {
-          message: 'response truncated',
-          userMessage: 'La richiesta era troppo lunga. Prova a dividerla.',
-          retryable: false,
-        });
-      }
-
-      const textBlock = response.content.find((b) => b.type === 'text');
-      if (!textBlock || textBlock.type !== 'text') {
-        throw new PlannerError('upstream_rejected', {
-          message: 'no text block in response',
+          message: 'response is not valid json',
           retryable: true,
         });
       }
 
-      const parsed = validateInterpretation(JSON.parse(textBlock.text));
+      const parsed = validateInterpretation(json);
       if (!parsed.success) {
-        // Structured outputs makes this near-impossible, but a schema drift
-        // should surface as a clear error rather than a silent bad write.
         throw new PlannerError('upstream_rejected', {
-          message: `schema mismatch: ${parsed.error.message}`,
-          userMessage: 'Risposta inattesa dal modello. Riprova.',
+          message: `schema mismatch: ${parsed.error.message.slice(0, 300)}`,
           retryable: true,
         });
       }
 
       return parsed.data;
     },
-    { label: 'claude.interpret', attempts: 3 },
+    { label: 'deepseek.interpret', attempts: 3 },
   );
 }
 
-function mapAnthropicError(err: unknown): PlannerError {
-  if (err instanceof Anthropic.RateLimitError) {
-    return new PlannerError('rate_limited', {
-      message: err.message,
-      retryable: true,
-      retryAfterMs: 3_000,
-    });
-  }
-  if (err instanceof Anthropic.AuthenticationError) {
-    return new PlannerError('config_missing', {
-      message: err.message,
-      userMessage: 'La chiave Claude non è valida. Controlla la configurazione.',
+interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+interface ChatCompletion {
+  choices?: Array<{
+    finish_reason?: string;
+    message?: { content?: string | null };
+  }>;
+}
+
+/**
+ * One chat completion with thinking off. Returns the message text, and turns
+ * the ways DeepSeek can fail without an HTTP error into PlannerErrors.
+ */
+async function chat(
+  env: Env,
+  label: string,
+  body: {
+    max_tokens: number;
+    messages: ChatMessage[];
+    response_format?: { type: 'json_object' };
+  },
+): Promise<string> {
+  if (!env.DEEPSEEK_API_KEY) {
+    throw new PlannerError('config_missing', {
+      message: 'DEEPSEEK_API_KEY not set',
+      userMessage: 'La chiave DeepSeek non è impostata.',
       retryable: false,
     });
   }
-  if (err instanceof Anthropic.APIConnectionError) {
-    return new PlannerError('upstream_unavailable', {
-      message: err.message,
+
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      `${DEEPSEEK_BASE_URL}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.DEEPSEEK_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          thinking: { type: 'disabled' },
+          ...body,
+        }),
+      },
+      30_000,
+    );
+  } catch (err) {
+    if (err instanceof PlannerError) throw err;
+    throw new PlannerError('upstream_unavailable', {
+      message: `${label}: ${String(err)}`,
       retryable: true,
     });
   }
-  if (err instanceof Anthropic.APIError) {
-    return new PlannerError(
-      err.status && err.status >= 500 ? 'upstream_unavailable' : 'upstream_rejected',
-      { message: `${err.status}: ${err.message}`, retryable: (err.status ?? 0) >= 500 },
-    );
+  await assertOk(res, label);
+
+  const completion = (await res.json()) as ChatCompletion;
+  const choice = completion.choices?.[0];
+
+  if (choice?.finish_reason === 'length') {
+    throw new PlannerError('upstream_rejected', {
+      message: `${label}: response truncated`,
+      userMessage: 'La richiesta era troppo lunga. Prova a dividerla.',
+      retryable: false,
+    });
   }
-  return toPlannerError(err);
+  if (choice?.finish_reason === 'content_filter') {
+    throw new PlannerError('upstream_rejected', {
+      message: `${label}: content filtered`,
+      userMessage:
+        'Non sono riuscita a interpretare questa richiesta. Prova a riformularla.',
+      retryable: false,
+    });
+  }
+
+  const content = choice?.message?.content?.trim() ?? '';
+  if (!content) {
+    // DeepSeek documents that JSON mode occasionally returns empty content.
+    throw new PlannerError('upstream_rejected', {
+      message: `${label}: empty content`,
+      retryable: true,
+    });
+  }
+  return content;
 }
 
 /**
@@ -338,26 +373,19 @@ export async function composeBriefing(
   env: Env,
   prompt: string,
 ): Promise<string> {
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, maxRetries: 0 });
-
   return withRetry(
-    async () => {
-      let response;
-      try {
-        response = await client.messages.create({
-          model: MODEL,
-          max_tokens: 1200,
-          system:
-            'Sei l’assistente di pianificazione di Giulia. Scrivi in italiano, in seconda persona, con tono diretto e caldo. Massimo 120 parole. Vai al punto: cosa conta oggi, cosa può slittare. Niente elenchi puntati se non servono davvero, niente preamboli.',
-          messages: [{ role: 'user', content: prompt }],
-        });
-      } catch (err) {
-        throw mapAnthropicError(err);
-      }
-
-      const textBlock = response.content.find((b) => b.type === 'text');
-      return textBlock && textBlock.type === 'text' ? textBlock.text.trim() : '';
-    },
-    { label: 'claude.briefing', attempts: 2 },
+    () =>
+      chat(env, 'deepseek.briefing', {
+        max_tokens: 1200,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Sei l’assistente di pianificazione di Giulia. Scrivi in italiano, in seconda persona, con tono diretto e caldo. Massimo 120 parole. Vai al punto: cosa conta oggi, cosa può slittare. Niente elenchi puntati se non servono davvero, niente preamboli.',
+          },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    { label: 'deepseek.briefing', attempts: 2 },
   );
 }

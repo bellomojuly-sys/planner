@@ -9,7 +9,7 @@ export interface Env {
 
   // Secrets. See wrangler.toml for how to set them.
   MASTER_KEY: string;
-  ANTHROPIC_API_KEY: string;
+  DEEPSEEK_API_KEY?: string;
   NOTION_TOKEN?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;

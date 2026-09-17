@@ -44,7 +44,7 @@ enabled = true
 # Secrets — set with `wrangler secret put <NAME>`, never in this file:
 #
 #   MASTER_KEY            base64 32 bytes. Encrypts credentials at rest.
-#   ANTHROPIC_API_KEY     Claude API key.
+#   DEEPSEEK_API_KEY      DeepSeek API key (voice parsing, briefings).
 #   NOTION_TOKEN          Notion internal integration token.
 #   GOOGLE_CLIENT_ID      OAuth client (Desktop or Web).
 #   GOOGLE_CLIENT_SECRET

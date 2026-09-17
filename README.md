@@ -1,7 +1,7 @@
 # Planner
 
 Personal planning agent for Giulia. It reads tasks from Notion and fixed
-commitments from Google Calendar, interprets Italian voice commands with Claude,
+commitments from Google Calendar, interprets Italian voice commands with DeepSeek,
 and fills the free time with work and gym blocks while respecting energy,
 priority and dependencies.
 
@@ -44,7 +44,7 @@ browser never sees them**: every outbound call leaves from the server.
 - A Cloudflare account (free)
 - A Notion internal integration
 - A Google Cloud project with the Calendar API enabled
-- An Anthropic API key
+- A DeepSeek API key
 
 ---
 
@@ -158,7 +158,7 @@ trip or an all-day deadline does not wipe out a whole day of planning by itself.
 
 ```bash
 npx wrangler secret put MASTER_KEY
-npx wrangler secret put ANTHROPIC_API_KEY
+npx wrangler secret put DEEPSEEK_API_KEY
 npx wrangler secret put NOTION_TOKEN
 npx wrangler secret put GOOGLE_CLIENT_ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET

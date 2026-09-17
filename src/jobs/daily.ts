@@ -7,7 +7,7 @@ import {
   shoppingItems,
   settings as settingsTable,
 } from '../db/schema';
-import { composeBriefing } from '../integrations/claude';
+import { composeBriefing } from '../integrations/llm';
 import { estimateAccuracy } from '../scheduler/estimate';
 import { sendToUser } from '../services/outbox';
 import {
@@ -203,7 +203,7 @@ ${renderAgenda(agenda, timezone)}
 ${agenda.overdue.length > 0 ? `IN RITARDO\n${agenda.overdue.map((t) => `- ${t.title}`).join('\n')}\n` : ''}${agenda.shoppingOpen > 0 ? `Lista della spesa: ${agenda.shoppingOpen} articoli aperti.\n` : ''}
 Scrivi il briefing: cosa conta davvero oggi, dove sono i momenti stretti, cosa può slittare senza danni. Non ripetere l'elenco orario, Giulia ce l'ha già davanti.`;
 
-  // If Claude is unreachable the plan is still correct, so fall back to the
+  // If the model is unreachable the plan is still correct, so fall back to the
   // plain agenda rather than skipping the briefing entirely.
   let text: string;
   try {

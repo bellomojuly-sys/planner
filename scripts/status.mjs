@@ -20,11 +20,11 @@ const routeHost = `https://${workerName}.giulia-planner.workers.dev`;
 
 const GROUPS = [
   {
-    name: 'Voce (Claude)',
-    secrets: ['ANTHROPIC_API_KEY'],
+    name: 'Voce (DeepSeek)',
+    secrets: ['DEEPSEEK_API_KEY'],
     how: [
-      'Crea una chiave su https://console.anthropic.com → API keys, poi:',
-      '  npx wrangler secret put ANTHROPIC_API_KEY',
+      'Crea una chiave su https://platform.deepseek.com/api_keys (e ricarica il credito), poi:',
+      '  npx wrangler secret put DEEPSEEK_API_KEY',
     ],
   },
   {

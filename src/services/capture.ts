@@ -10,7 +10,7 @@ import {
   outbox,
   type Task,
 } from '../db/schema';
-import { interpretUtterance, type Intent } from '../integrations/claude';
+import { interpretUtterance, type Intent } from '../integrations/llm';
 import { applyLearning, recordCompletion } from '../scheduler/estimate';
 import { replan, type RescheduleTrigger } from './planner';
 import { getPlannerCalendarId } from './calendar-sources';

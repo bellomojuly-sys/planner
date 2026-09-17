@@ -53,7 +53,7 @@ settingsRoutes.get('/', async (c) => {
     integrations: {
       notion: Boolean(c.env.NOTION_TOKEN),
       google: Boolean(c.env.GOOGLE_REFRESH_TOKEN),
-      claude: Boolean(c.env.ANTHROPIC_API_KEY),
+      voice: Boolean(c.env.DEEPSEEK_API_KEY),
       push: Boolean(c.env.VAPID_PUBLIC_KEY),
     },
   });

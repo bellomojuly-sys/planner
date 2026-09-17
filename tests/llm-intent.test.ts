@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { validateInterpretation } from '../src/integrations/claude';
+import { validateInterpretation } from '../src/integrations/llm';
 
-describe('Claude intent contract', () => {
+describe('Voice intent contract', () => {
   it.each([
     ['non spostare questo task', true],
     ['puoi spostare di nuovo questo task', false],

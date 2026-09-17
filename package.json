@@ -19,7 +19,6 @@
     "status": "node scripts/status.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.116.0",
     "@date-fns/tz": "^1.4.1",
     "date-fns": "^4.1.0",
     "drizzle-orm": "^0.44.6",
