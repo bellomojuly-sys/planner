@@ -180,17 +180,17 @@ async function checkPush(env: Env): Promise<IntegrationCheck> {
  */
 function explain(err: unknown): string {
   if (err instanceof PlannerError) {
-    if (err.code === 'config_missing') {
-      return 'Credenziali rifiutate dal servizio. Controlla la chiave di questa integrazione.';
-    }
-    if (err.code === 'rate_limited') {
-      return 'Chiave valida, ma il limite di richieste è stato superato. Riprova fra poco.';
-    }
     if (err.message.includes('invalid_client')) {
       return 'Google non riconosce il Client ID o il Client secret. Devono essere dello stesso client OAuth.';
     }
     if (err.message.includes('invalid_grant')) {
       return 'Il refresh token Google non vale per questo client o è stato revocato. Rifai scripts/google-auth.mjs.';
+    }
+    if (err.code === 'config_missing') {
+      return 'Credenziali rifiutate dal servizio. Controlla la chiave di questa integrazione.';
+    }
+    if (err.code === 'rate_limited') {
+      return 'Chiave valida, ma il limite di richieste è stato superato. Riprova fra poco.';
     }
     if (err.message.includes(': 402')) {
       return 'Chiave valida, ma il credito è esaurito.';
