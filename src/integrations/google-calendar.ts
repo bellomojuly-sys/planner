@@ -27,6 +27,15 @@ interface CachedToken {
  * Access tokens live an hour; caching them in KV avoids a token exchange on
  * every cron tick and keeps us well inside Google's quota.
  */
+/**
+ * Secrets pasted by hand or piped through `echo` can carry a trailing newline,
+ * spaces or the quotes around them, and Google then reports a perfectly good
+ * client as "not found".
+ */
+export function cleanSecret(value: string | undefined): string {
+  return (value ?? '').trim().replace(/^(["'])(.*)\1$/s, '$2').trim();
+}
+
 async function getAccessToken(env: Env): Promise<string> {
   const cached = await env.CACHE.get<CachedToken>('google:access_token', 'json');
   // 60s safety margin so a token cannot expire mid-request.
@@ -48,9 +57,9 @@ async function getAccessToken(env: Env): Promise<string> {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
-          client_id: env.GOOGLE_CLIENT_ID!,
-          client_secret: env.GOOGLE_CLIENT_SECRET!,
-          refresh_token: env.GOOGLE_REFRESH_TOKEN!,
+          client_id: cleanSecret(env.GOOGLE_CLIENT_ID),
+          client_secret: cleanSecret(env.GOOGLE_CLIENT_SECRET),
+          refresh_token: cleanSecret(env.GOOGLE_REFRESH_TOKEN),
           grant_type: 'refresh_token',
         }),
       });

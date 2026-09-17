@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { cleanSecret } from '../src/integrations/google-calendar';
 import type {
   GoogleCalendar,
   GoogleEvent,
@@ -98,5 +99,16 @@ describe('calendar event classification', () => {
       classifyEvent(event({ title: 'Lezione università' }), ['lezione'], 'busy')
         .isShift,
     ).toBe(false);
+  });
+});
+
+describe('pasted Google secrets', () => {
+  it.each([
+    ['123-abc.apps.googleusercontent.com\n', '123-abc.apps.googleusercontent.com'],
+    ['  "123-abc.apps.googleusercontent.com"  ', '123-abc.apps.googleusercontent.com'],
+    ["'GOCSPX-secret'", 'GOCSPX-secret'],
+    ['1//0g-token', '1//0g-token'],
+  ])('cleans %j', (raw, clean) => {
+    expect(cleanSecret(raw)).toBe(clean);
   });
 });

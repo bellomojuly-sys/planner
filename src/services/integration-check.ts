@@ -1,5 +1,5 @@
 import { DEEPSEEK_BASE_URL, MODEL as LLM_MODEL } from '../integrations/llm';
-import { listCalendars } from '../integrations/google-calendar';
+import { cleanSecret, listCalendars } from '../integrations/google-calendar';
 import { assertOk, fetchWithTimeout } from '../lib/retry';
 import { PlannerError, toPlannerError } from '../lib/errors';
 import type { Env } from '../env';
@@ -133,6 +133,15 @@ async function checkGoogle(env: Env): Promise<IntegrationCheck> {
     };
   }
 
+  if (!cleanSecret(env.GOOGLE_CLIENT_ID).endsWith('.apps.googleusercontent.com')) {
+    return {
+      service: 'google',
+      state: 'error',
+      detail:
+        'Il Client ID salvato non è un Client ID Google (deve finire con .apps.googleusercontent.com). Salvalo di nuovo.',
+    };
+  }
+
   try {
     // Exercises the whole chain: refresh token → access token → API call.
     const calendars = await listCalendars(env);
@@ -172,10 +181,16 @@ async function checkPush(env: Env): Promise<IntegrationCheck> {
 function explain(err: unknown): string {
   if (err instanceof PlannerError) {
     if (err.code === 'config_missing') {
-      return 'Chiave non valida o revocata. Controlla la chiave o l’integrazione.';
+      return 'Credenziali rifiutate dal servizio. Controlla la chiave di questa integrazione.';
     }
     if (err.code === 'rate_limited') {
       return 'Chiave valida, ma il limite di richieste è stato superato. Riprova fra poco.';
+    }
+    if (err.message.includes('invalid_client')) {
+      return 'Google non riconosce il Client ID o il Client secret. Devono essere dello stesso client OAuth.';
+    }
+    if (err.message.includes('invalid_grant')) {
+      return 'Il refresh token Google non vale per questo client o è stato revocato. Rifai scripts/google-auth.mjs.';
     }
     if (err.message.includes(': 402')) {
       return 'Chiave valida, ma il credito è esaurito.';
