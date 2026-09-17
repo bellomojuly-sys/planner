@@ -88,6 +88,29 @@ export async function applyLearning(
       and(eq(estimateModel.userId, userId), inArray(estimateModel.bucketKey, keys)),
     );
 
+  return blendLearning(rows, input);
+}
+
+/**
+ * Loads every learned bucket once, for callers that estimate many tasks in
+ * one invocation. One query per task does not fit D1's per-invocation limit
+ * on a database with hundreds of rows.
+ */
+export async function loadEstimateModel(
+  db: DB,
+  userId: string,
+): Promise<Array<typeof estimateModel.$inferSelect>> {
+  return db.select().from(estimateModel).where(eq(estimateModel.userId, userId));
+}
+
+/** Same result as `applyLearning`, from buckets already in memory. */
+export function blendLearning(
+  allRows: Array<typeof estimateModel.$inferSelect>,
+  input: { area: Area; energy: Energy; title: string; estimatedMinutes: number },
+): LearnedAdjustment {
+  const keys = new Set(bucketKeysFor(input));
+  const rows = allRows.filter((r) => keys.has(r.bucketKey));
+
   if (rows.length === 0) {
     return {
       plannedMinutes: input.estimatedMinutes,

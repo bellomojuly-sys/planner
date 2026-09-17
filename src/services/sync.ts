@@ -15,7 +15,7 @@ import {
   isSyncTokenExpired,
   type GoogleEvent,
 } from '../integrations/google-calendar';
-import { applyLearning } from '../scheduler/estimate';
+import { blendLearning, loadEstimateModel } from '../scheduler/estimate';
 import { inferPhaseEdges, parsePhase } from '../scheduler/dependencies';
 import { DAY_MS } from '../lib/time';
 import { PlannerError, toPlannerError } from '../lib/errors';
@@ -77,6 +77,10 @@ export async function syncNotion(
     .from(taskSources)
     .where(and(eq(taskSources.userId, userId), eq(taskSources.enabled, true)));
 
+  // Loaded once: per-row lookups multiply queries by the size of the
+  // database, and D1 caps queries per invocation.
+  const learningModel = sources.length > 0 ? await loadEstimateModel(db, userId) : [];
+
   for (const source of sources) {
     try {
       // Overlap the window by an hour: Notion's last_edited_time has coarse
@@ -87,6 +91,14 @@ export async function syncNotion(
       // no remote row changed during the outage.
       if (source.lastSyncError) report.changed = true;
 
+      const localRows = await db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.userId, userId), eq(tasks.sourceId, source.id)));
+      const byExternalId = new Map(
+        localRows.filter((t) => t.externalId).map((t) => [t.externalId!, t]),
+      );
+
       for (const item of remote) {
         // Meetings already exist as Google Calendar events, and a deadline is
         // a date marker: scheduling either as work would double-book the day.
@@ -95,13 +107,16 @@ export async function syncNotion(
           continue;
         }
 
-        const existing = await db.query.tasks.findFirst({
-          where: and(
-            eq(tasks.userId, userId),
-            eq(tasks.sourceId, source.id),
-            eq(tasks.externalId, item.externalId),
-          ),
-        });
+        const existing = byExternalId.get(item.externalId);
+
+        // Local edits win when they are newer — Giulia dragging a block should
+        // not be undone by a stale Notion row.
+        if (
+          existing?.externalUpdatedAt &&
+          item.externalUpdatedAt <= existing.externalUpdatedAt
+        ) {
+          continue;
+        }
 
         const area = notion.normalizeArea(item.area, source.area as never);
         const energy = item.energy ?? existing?.energy ?? 'medium';
@@ -110,7 +125,7 @@ export async function syncNotion(
 
         // Notion's estimate is a starting point; the learned bias is what the
         // scheduler actually books time for.
-        const learned = await applyLearning(db, userId, {
+        const learned = blendLearning(learningModel, {
           area,
           energy,
           title: item.title,
@@ -146,15 +161,6 @@ export async function syncNotion(
           });
           report.tasksUpserted++;
           report.changed = true;
-          continue;
-        }
-
-        // Local edits win when they are newer — Giulia dragging a block should
-        // not be undone by a stale Notion row.
-        if (
-          existing.externalUpdatedAt &&
-          item.externalUpdatedAt <= existing.externalUpdatedAt
-        ) {
           continue;
         }
 
@@ -264,12 +270,25 @@ async function materializeRelationDependencies(
     ...new Set(withDeps.flatMap((r) => [r.externalId, ...r.dependsOnExternalIds])),
   ];
 
-  const local = await db
-    .select({ id: tasks.id, externalId: tasks.externalId })
-    .from(tasks)
-    .where(and(eq(tasks.userId, userId), inArray(tasks.externalId, externalIds)));
+  // Filtered in memory: an `IN` over every related id exceeds D1's limit of
+  // 100 bound parameters on a large database.
+  const wanted = new Set(externalIds);
+  const local = (
+    await db
+      .select({ id: tasks.id, externalId: tasks.externalId })
+      .from(tasks)
+      .where(eq(tasks.userId, userId))
+  ).filter((t) => t.externalId && wanted.has(t.externalId));
 
   const byExternal = new Map(local.map((t) => [t.externalId!, t.id]));
+  const existingEdges = new Set(
+    (
+      await db
+        .select({ taskId: taskDependencies.taskId, dependsOnId: taskDependencies.dependsOnId })
+        .from(taskDependencies)
+        .where(eq(taskDependencies.userId, userId))
+    ).map((e) => `${e.taskId}>${e.dependsOnId}`),
+  );
 
   for (const item of withDeps) {
     const taskId = byExternal.get(item.externalId);
@@ -279,6 +298,7 @@ async function materializeRelationDependencies(
       const dependsOnId = byExternal.get(depExternal);
       // A relation may point at a page in a database we do not sync.
       if (!dependsOnId || dependsOnId === taskId) continue;
+      if (existingEdges.has(`${taskId}>${dependsOnId}`)) continue;
 
       await db
         .insert(taskDependencies)
@@ -312,7 +332,9 @@ export async function inferPhaseDependencies(db: DB, userId: string): Promise<vo
     map.set(edge.taskId, list);
   }
 
+  const known = new Set(existingEdges.map((e) => `${e.taskId}>${e.dependsOnId}`));
   for (const edge of inferPhaseEdges(open, map)) {
+    if (known.has(`${edge.taskId}>${edge.dependsOnId}`)) continue;
     await db
       .insert(taskDependencies)
       .values({ ...edge, userId, createdBy: 'phase_rule' })
