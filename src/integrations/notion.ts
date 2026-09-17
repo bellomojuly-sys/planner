@@ -282,6 +282,24 @@ export interface NotionTask {
 }
 
 /**
+ * Combines the incremental `since` window with the source's own row filter.
+ * Notion accepts a single top-level filter, so both go under one `and`.
+ */
+export function buildQueryFilter(
+  since: number | null,
+  sourceFilter: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const window = since
+    ? {
+        timestamp: 'last_edited_time',
+        last_edited_time: { on_or_after: new Date(since).toISOString() },
+      }
+    : undefined;
+  if (window && sourceFilter) return { and: [window, sourceFilter] };
+  return window ?? sourceFilter;
+}
+
+/**
  * Pulls every page changed since `since`. Notion has no true delta feed, so
  * this filters on last_edited_time — which is why the sync is idempotent and
  * safe to run every five minutes.
@@ -304,12 +322,8 @@ export async function fetchTasks(
   do {
     const body: Record<string, unknown> = { page_size: 100 };
     if (cursor) body.start_cursor = cursor;
-    if (since) {
-      body.filter = {
-        timestamp: 'last_edited_time',
-        last_edited_time: { on_or_after: new Date(since).toISOString() },
-      };
-    }
+    const filter = buildQueryFilter(since, source.propertyMap.filter);
+    if (filter) body.filter = filter;
 
     const page = await notionFetch<any>(
       token,

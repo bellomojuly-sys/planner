@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { guessPropertyMap, normalizeArea } from '../src/integrations/notion';
+import { buildQueryFilter, guessPropertyMap, normalizeArea } from '../src/integrations/notion';
+import { staleTaskIds } from '../src/services/sync';
 import type { NotionDatabaseInfo } from '../src/integrations/notion';
 
 /**
@@ -346,5 +347,41 @@ describe('row translation', () => {
     expect(
       mapPage({ id: 'x', properties: { 'Task Name': { title: [] } } }, TASKS_MAP),
     ).toBeNull();
+  });
+});
+
+describe('source row filter', () => {
+  const mine = { property: 'Responsabile', multi_select: { contains: 'Giulia' } };
+
+  it('uses the source filter alone on a full pull', () => {
+    expect(buildQueryFilter(null, mine)).toEqual(mine);
+  });
+
+  it('combines the incremental window with the source filter', () => {
+    const since = Date.UTC(2026, 8, 17);
+    expect(buildQueryFilter(since, mine)).toEqual({
+      and: [
+        {
+          timestamp: 'last_edited_time',
+          last_edited_time: { on_or_after: '2026-09-17T00:00:00.000Z' },
+        },
+        mine,
+      ],
+    });
+  });
+
+  it('sends no filter when there is neither', () => {
+    expect(buildQueryFilter(null, undefined)).toBeUndefined();
+  });
+});
+
+describe('pruning tasks that left the source', () => {
+  it('drops imported rows missing from a full pull and keeps local-only tasks', () => {
+    const local = [
+      { id: 'a', externalId: 'n1' },
+      { id: 'b', externalId: 'n2' },
+      { id: 'c', externalId: null },
+    ];
+    expect(staleTaskIds(local, new Set(['n1']))).toEqual(['b']);
   });
 });

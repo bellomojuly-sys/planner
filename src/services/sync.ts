@@ -196,6 +196,14 @@ export async function syncNotion(
       // Notion relations reference page ids; translate them to local ids.
       await materializeRelationDependencies(db, userId, source.id, remote);
 
+      // Only a full pull sees every row, so only a full pull can tell that a
+      // local copy no longer belongs here: deleted in Notion, or now outside
+      // the source filter. Notion itself is never touched.
+      if (!since) {
+        const removed = await pruneMissingTasks(db, userId, source.id, remote);
+        if (removed > 0) report.changed = true;
+      }
+
       await db
         .update(taskSources)
         .set({ lastSyncedAt: Date.now(), lastSyncError: null })
@@ -212,6 +220,35 @@ export async function syncNotion(
 
   await inferPhaseDependencies(db, userId);
   return report;
+}
+
+/** Local tasks imported from a source whose Notion row was not returned. */
+export function staleTaskIds(
+  local: Array<{ id: string; externalId: string | null }>,
+  remoteExternalIds: Set<string>,
+): string[] {
+  return local
+    .filter((t) => t.externalId !== null && !remoteExternalIds.has(t.externalId))
+    .map((t) => t.id);
+}
+
+async function pruneMissingTasks(
+  db: DB,
+  userId: string,
+  sourceId: string,
+  remote: notion.NotionTask[],
+): Promise<number> {
+  const local = await db
+    .select({ id: tasks.id, externalId: tasks.externalId })
+    .from(tasks)
+    .where(and(eq(tasks.userId, userId), eq(tasks.sourceId, sourceId)));
+
+  const stale = staleTaskIds(local, new Set(remote.map((r) => r.externalId)));
+  // D1 caps bound parameters at 100 per statement.
+  for (let i = 0; i < stale.length; i += 90) {
+    await db.delete(tasks).where(inArray(tasks.id, stale.slice(i, i + 90)));
+  }
+  return stale.length;
 }
 
 async function materializeRelationDependencies(

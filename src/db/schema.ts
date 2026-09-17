@@ -280,6 +280,12 @@ export interface NotionPropertyMap {
    * Area instead of an empty one.
    */
   areaValues?: Partial<Record<Area, string>>;
+  /**
+   * Raw Notion database-query filter that limits which rows this source
+   * imports, e.g. only rows where `Responsabile` contains Giulia in a shared
+   * team database. Rows outside it are treated as not belonging to Planner.
+   */
+  filter?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------

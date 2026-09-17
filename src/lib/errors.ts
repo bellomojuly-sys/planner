@@ -92,8 +92,11 @@ export function toPlannerError(err: unknown): PlannerError {
     const transient = /fetch failed|network|socket|timeout|aborted/i.test(
       err.message,
     );
+    // Drizzle wraps the D1 error and keeps only the SQL in its own message;
+    // without the cause a failed query is impossible to diagnose from logs.
+    const cause = err.cause instanceof Error ? ` [cause: ${err.cause.message}]` : '';
     return new PlannerError(transient ? 'upstream_unavailable' : 'internal', {
-      message: err.message,
+      message: `${err.message}${cause}`,
       retryable: transient,
       cause: err,
     });
