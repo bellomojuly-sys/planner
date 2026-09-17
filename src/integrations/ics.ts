@@ -269,7 +269,14 @@ export async function fetchIcsEvents(
 ): Promise<IcsParseResult> {
   const res = await fetchWithTimeout(
     normalizeFeedUrl(url),
-    { headers: { Accept: 'text/calendar, text/plain;q=0.8' } },
+    {
+      headers: {
+        Accept: 'text/calendar, text/plain;q=0.8',
+        // Canvas answers a Worker's header-less request with 401; a plain
+        // client identification is enough for it to serve the feed.
+        'User-Agent': 'Planner/1.0 (personal calendar client)',
+      },
+    },
     20_000,
   );
   await assertOk(res, 'ics.fetch');

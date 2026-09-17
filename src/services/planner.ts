@@ -285,11 +285,14 @@ async function loadPlanningDataIssues(
     if (source.lastSyncError) issues.add(`${source.name}: ${source.lastSyncError}`);
   }
 
+  // Only calendars that carry commitments are required input. A context
+  // calendar holds deadlines and markers: losing it for an hour is worth a
+  // warning, not a reason to stop replanning around real shifts.
   const activeCalendarIds = new Set(
     configuredCalendars.length === 0
       ? calendarStates.map((state) => state.calendarId)
       : configuredCalendars
-          .filter((source) => source.role !== 'ignore')
+          .filter((source) => source.role === 'busy' || source.role === 'planner')
           .map((source) => source.calendarId),
   );
   for (const state of calendarStates) {

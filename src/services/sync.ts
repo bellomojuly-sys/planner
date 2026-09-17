@@ -572,6 +572,26 @@ export async function syncIcsCalendar(
   const from = Date.now() - DAY_MS;
   const to = Date.now() + (horizonDays + 7) * DAY_MS;
 
+  const state = await db
+    .select()
+    .from(calendarSyncState)
+    .where(
+      and(
+        eq(calendarSyncState.userId, userId),
+        eq(calendarSyncState.calendarId, source.calendarId),
+      ),
+    )
+    .limit(1);
+
+  // Feeds are polled, not pushed, and publishers rate-limit: Canvas starts
+  // answering 403 when asked every five minutes. A shift calendar is worth
+  // checking often, a deadlines calendar is not.
+  const minIntervalMs = source.role === 'busy' ? 5 * 60_000 : 30 * 60_000;
+  const lastSyncedAt = state[0]?.lastSyncedAt ?? 0;
+  if (!state[0]?.lastError && Date.now() - lastSyncedAt < minIntervalMs) {
+    return report;
+  }
+
   let parsed;
   try {
     parsed = await fetchIcsEvents(source.feedUrl, env.APP_TIMEZONE);
@@ -621,16 +641,6 @@ export async function syncIcsCalendar(
     report.changed = true;
   }
 
-  const state = await db
-    .select()
-    .from(calendarSyncState)
-    .where(
-      and(
-        eq(calendarSyncState.userId, userId),
-        eq(calendarSyncState.calendarId, source.calendarId),
-      ),
-    )
-    .limit(1);
   if (state[0]?.lastError) report.changed = true;
   await upsertSyncState(db, userId, source.calendarId, null, null);
 
