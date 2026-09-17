@@ -9,6 +9,7 @@ import {
 } from '../db/schema';
 import {
   listCalendars,
+  subscribeToCalendar,
   type GoogleCalendar,
 } from '../integrations/google-calendar';
 import { isLikelyIcsUrl, normalizeFeedUrl } from '../integrations/ics';
@@ -104,6 +105,68 @@ export async function addIcsSource(
       },
     })
     .returning();
+
+  return row!;
+}
+
+/**
+ * Registers one Google calendar by id, for the case discovery cannot cover:
+ * a calendar shared with the service account is reachable but unlisted.
+ */
+export async function addGoogleCalendarById(
+  env: Env,
+  db: DB,
+  userId: string,
+  input: { calendarId: string; role: CalendarRole },
+) {
+  const calendar = await subscribeToCalendar(env, input.calendarId.trim());
+
+  if (input.role === 'planner' && !canWriteCalendar(calendar.accessRole)) {
+    throw new PlannerError('bad_request', {
+      message: `calendar ${calendar.id} is ${calendar.accessRole}`,
+      userMessage:
+        'Su questo calendario Planner può solo leggere. Condividilo con il permesso "Apportare modifiche agli eventi" e riprova.',
+    });
+  }
+
+  const [row] = await db
+    .insert(calendarSources)
+    .values({
+      userId,
+      calendarId: calendar.id,
+      summary: calendar.summary,
+      kind: 'google',
+      role: input.role,
+      color: calendar.color,
+      accessRole: calendar.accessRole,
+      primary: calendar.primary,
+      enabled: true,
+    })
+    .onConflictDoUpdate({
+      target: [calendarSources.userId, calendarSources.calendarId],
+      set: {
+        summary: calendar.summary,
+        role: input.role,
+        accessRole: calendar.accessRole,
+        enabled: true,
+        updatedAt: Date.now(),
+      },
+    })
+    .returning();
+
+  // Exactly one calendar receives the plan.
+  if (input.role === 'planner') {
+    await db
+      .update(calendarSources)
+      .set({ role: 'busy' })
+      .where(
+        and(
+          eq(calendarSources.userId, userId),
+          eq(calendarSources.role, 'planner'),
+          ne(calendarSources.id, row!.id),
+        ),
+      );
+  }
 
   return row!;
 }

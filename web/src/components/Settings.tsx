@@ -493,6 +493,88 @@ const CALENDAR_ROLE_LABELS = {
  * refuses to share those, so Planner reads the feed itself. The address never
  * comes back from the server, only its host.
  */
+/**
+ * A calendar shared with the service account is reachable but not listed, so
+ * "rileva calendari" cannot find it. Registering its id once fixes that.
+ */
+function AddGoogleCalendarById({
+  onAdded,
+  onChanged,
+}: {
+  onAdded: () => Promise<void>;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [calendarId, setCalendarId] = useState('');
+  const [role, setRole] = useState<'planner' | 'busy' | 'context'>('planner');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!open) {
+    return (
+      <button className="btn" onClick={() => setOpen(true)}>
+        Collega un calendario Google per ID
+      </button>
+    );
+  }
+
+  return (
+    <form
+      className="stack"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        setBusy(true);
+        setError(null);
+        try {
+          await api.post('/settings/google/calendars/add', { calendarId, role });
+          setCalendarId('');
+          setOpen(false);
+          await onAdded();
+          onChanged();
+        } catch (err) {
+          setError(err instanceof ApiError ? err.message : 'Calendario non collegato.');
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {error && (
+        <div className="banner" data-tone="error">
+          {error}
+        </div>
+      )}
+      <input
+        value={calendarId}
+        onChange={(e) => setCalendarId(e.target.value)}
+        placeholder="ID calendario (…@group.calendar.google.com)"
+        required
+      />
+      <select
+        value={role}
+        onChange={(e) => setRole(e.target.value as 'planner' | 'busy' | 'context')}
+      >
+        <option value="planner">Ci scrivo il piano</option>
+        <option value="busy">Impegno fisso — blocca il tempo</option>
+        <option value="context">Contesto — solo visibile</option>
+      </select>
+      <p className="list__meta">
+        Condividilo prima con il service account: in lettura per gli impegni, con
+        “Apportare modifiche agli eventi” per il calendario che riceve il piano.
+        L’ID sta in Google Calendar → Impostazioni del calendario → Integra
+        calendario.
+      </p>
+      <div className="row">
+        <button className="btn" type="submit" disabled={busy}>
+          {busy ? 'Collego…' : 'Collega'}
+        </button>
+        <button className="btn" type="button" onClick={() => setOpen(false)}>
+          Annulla
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function AddIcsCalendar({
   onAdded,
   onChanged,
@@ -678,6 +760,7 @@ function GoogleCalendars({
         </ul>
       )}
 
+      <AddGoogleCalendarById onAdded={onReload} onChanged={onChanged} />
       <AddIcsCalendar onAdded={onReload} onChanged={onChanged} />
 
       <button

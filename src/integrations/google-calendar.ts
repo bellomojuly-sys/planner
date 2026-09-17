@@ -291,6 +291,34 @@ export interface GoogleCalendar {
   color: string;
 }
 
+/**
+ * Adds a calendar to the authenticated account's list.
+ *
+ * Sharing a calendar with a service account grants access but does not put it
+ * in that account's list, so discovery alone returns nothing. Registering the
+ * id once is what makes it visible — see
+ * `dl-how-planner-authenticates-to-google`, open question 1.
+ */
+export async function subscribeToCalendar(
+  env: Env,
+  calendarId: string,
+): Promise<GoogleCalendar> {
+  const entry = await calFetch<any>(
+    env,
+    '/users/me/calendarList',
+    { method: 'POST', body: JSON.stringify({ id: calendarId }) },
+    'google.subscribeToCalendar',
+  );
+
+  return {
+    id: entry.id ?? calendarId,
+    summary: entry.summary ?? calendarId,
+    primary: entry.primary === true,
+    accessRole: entry.accessRole ?? 'reader',
+    color: entry.backgroundColor ?? '#9aa3b8',
+  };
+}
+
 export async function listCalendars(env: Env): Promise<GoogleCalendar[]> {
   const calendars: GoogleCalendar[] = [];
   let pageToken: string | undefined;

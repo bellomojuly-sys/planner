@@ -20,6 +20,7 @@ import {
   discoverCalendarSources,
   loadCalendarSources,
   updateCalendarSource,
+  addGoogleCalendarById,
   addIcsSource,
   redactSource,
 } from '../services/calendar-sources';
@@ -221,6 +222,27 @@ settingsRoutes.get('/google/calendars', requireAuth('full'), async (c) => {
     c.get('auth').userId,
   );
   return c.json({ calendars: calendars.map(redactSource) });
+});
+
+settingsRoutes.post('/google/calendars/add', requireAuth('full'), async (c) => {
+  const body = z
+    .object({
+      calendarId: z.string().min(3).max(200),
+      role: z.enum(['busy', 'context', 'planner']).default('planner'),
+    })
+    .parse(await c.req.json());
+
+  const db = c.get('db');
+  const { userId } = c.get('auth');
+  const calendar = await addGoogleCalendarById(c.env, db, userId, body);
+
+  const sync = await syncCalendars(c.env, db, userId);
+  const diff = await replan(c.env, db, userId, 'calendar_change', {
+    syncErrors: sync.errors,
+  });
+  await drainOutbox(c.env, db);
+
+  return c.json({ ok: true, calendar: redactSource(calendar), sync, diff });
 });
 
 settingsRoutes.post('/calendars/ics', requireAuth('full'), async (c) => {
