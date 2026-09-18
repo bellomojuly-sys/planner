@@ -250,6 +250,8 @@ export function guessPropertyMap(info: NotionDatabaseInfo): NotionPropertyMap {
       ['select'],
       [/^(modalita scheduling|scheduling mode)$/i, /scheduling/i, /modalit/i],
     ),
+
+    horizon: pick(info, ['select'], [/^(orizzonte|horizon)$/i, /orizzont/i]),
   };
 }
 
@@ -279,6 +281,8 @@ export interface NotionTask {
    * already exist in Google Calendar, and deadlines like an exam date.
    */
   schedulable: boolean;
+  /** 0 = now, 1 = next, 2 = later; null when the database has no horizon. */
+  horizon: number | null;
 }
 
 /**
@@ -400,7 +404,18 @@ export function mapPage(page: any, map: NotionPropertyMap): NotionTask | null {
     splittable: !mode || !/lock|blocc|fixed|fiss/.test(mode),
     externalUpdatedAt: Date.parse(page.last_edited_time ?? '') || Date.now(),
     schedulable,
+    horizon: map.horizon ? parseHorizon(parseSelectish(props[map.horizon])) : null,
   };
+}
+
+/** ORA / DOPO / PIÙ AVANTI, and the English equivalents, to 0 / 1 / 2. */
+export function parseHorizon(label: string | null): number | null {
+  if (!label) return null;
+  const value = label.toLowerCase();
+  if (/^(ora|now|adesso)/.test(value)) return 0;
+  if (/^(dopo|next|poi)/.test(value)) return 1;
+  if (/avanti|later|futur/.test(value)) return 2;
+  return null;
 }
 
 // ---------------------------------------------------------------------------

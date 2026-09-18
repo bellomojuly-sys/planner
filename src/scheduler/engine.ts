@@ -286,6 +286,12 @@ function urgencyScore(
   // unblocks none, even at equal priority — this is the critical path.
   score += Math.min(30, blocking * 6);
 
+  // Horizon is Giulia's own answer to "when does this belong". NOW outranks a
+  // priority step; LATER yields its place to anything current. A task with no
+  // horizon (its source has none) is neither pushed nor held back.
+  if (task.horizon === 0) score += 25;
+  else if (task.horizon === 2) score -= 25;
+
   return score;
 }
 

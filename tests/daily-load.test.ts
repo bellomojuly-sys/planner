@@ -194,3 +194,24 @@ describe('model estimates', () => {
     expect(roundEstimate(2000)).toBe(480);
   });
 });
+
+describe('horizon', () => {
+  it('reads ORA / DOPO / PIÙ AVANTI', async () => {
+    const { parseHorizon } = await import('../src/integrations/notion');
+    expect(parseHorizon('ORA')).toBe(0);
+    expect(parseHorizon('DOPO')).toBe(1);
+    expect(parseHorizon('PIÙ AVANTI')).toBe(2);
+    expect(parseHorizon(null)).toBeNull();
+  });
+
+  it('plans NOW work before LATER work of higher priority when the week is full', () => {
+    // Two MG slots a day at most; ten hours of MG in total.
+    const later = Array.from({ length: 6 }, (_, i) =>
+      task({ id: `later${i}`, area: 'mg', plannedMinutes: 120, priority: 2, horizon: 2 }),
+    );
+    const now = task({ id: 'now', area: 'mg', plannedMinutes: 120, priority: 3, horizon: 0 });
+    const result = run([...later, now], [], 2);
+    expect(result.blocks.some((b) => b.taskId === 'now')).toBe(true);
+    expect(result.unplaced.some((u) => u.taskId === 'now')).toBe(false);
+  });
+});

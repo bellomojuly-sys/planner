@@ -286,6 +286,11 @@ export interface NotionPropertyMap {
    * team database. Rows outside it are treated as not belonging to Planner.
    */
   filter?: Record<string, unknown>;
+  /**
+   * Select that says *when* the work belongs: ORA / DOPO / PIÙ AVANTI. When
+   * the week cannot hold everything, it decides what goes first.
+   */
+  horizon?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +367,8 @@ export const tasks = sqliteTable(
     /** Free-text phase label ("Fase 15") used to auto-wire dependency chains. */
     phaseLabel: text('phase_label'),
     phaseOrder: integer('phase_order'),
+    /** 0 = now, 1 = next, 2 = later; null when the source has no horizon. */
+    horizon: integer('horizon'),
     projectKey: text('project_key'),
 
     isGym: integer('is_gym', { mode: 'boolean' }).notNull().default(false),

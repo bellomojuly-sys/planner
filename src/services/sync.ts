@@ -158,6 +158,7 @@ export async function syncNotion(
             phaseLabel: phase ? `${phase.order}` : null,
             phaseOrder: phase?.order ?? null,
             projectKey: phase?.projectKey ?? null,
+            horizon: item.horizon,
             externalUpdatedAt: item.externalUpdatedAt,
           });
           report.tasksUpserted++;
@@ -191,6 +192,7 @@ export async function syncNotion(
             phaseLabel: phase ? `${phase.order}` : existing.phaseLabel,
             phaseOrder: phase?.order ?? existing.phaseOrder,
             projectKey: phase?.projectKey ?? existing.projectKey,
+            horizon: item.horizon,
             externalUpdatedAt: item.externalUpdatedAt,
           })
           .where(eq(tasks.id, existing.id));

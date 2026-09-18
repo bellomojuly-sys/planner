@@ -24,6 +24,8 @@ export interface SchedulableTask {
   status: string;
   projectKey: string | null;
   phaseOrder: number | null;
+  /** 0 = now, 1 = next, 2 = later; null when the source has no horizon. */
+  horizon?: number | null;
 }
 
 export interface PlacedBlock {

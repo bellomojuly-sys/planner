@@ -334,6 +334,7 @@ async function loadSchedulableTasks(
     status: t.status,
     projectKey: t.projectKey,
     phaseOrder: t.phaseOrder,
+    horizon: t.horizon,
   }));
 }
 
