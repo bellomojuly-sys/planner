@@ -1,3 +1,4 @@
+import { pruneOrphanEvents } from '../services/prune-orphans';
 import { estimateMissing } from '../services/estimate-missing';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
@@ -73,6 +74,14 @@ export async function handleScheduled(env: Env): Promise<void> {
 
       // 5. Push whatever the replan queued.
       await drainOutbox(env, db);
+
+      // 6. Clear Planner events in Google that no block accounts for.
+      try {
+        const pruned = await pruneOrphanEvents(env, db, user.id);
+        if (pruned > 0) console.log(`[cron] removed ${pruned} orphan calendar events`);
+      } catch (err) {
+        console.warn('[cron] orphan sweep failed:', toPlannerError(err).message);
+      }
     } catch (err) {
       // One user's failure must not stop the others once this is multi-tenant.
       console.error(`[cron] failed for user ${user.id}:`, toPlannerError(err).message);

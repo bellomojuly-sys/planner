@@ -33,6 +33,9 @@ export interface OutboxReport {
   dead: number;
 }
 
+/** How long a claimed job stays reserved before another drain may retry it. */
+const CLAIM_MS = 5 * 60_000;
+
 export async function drainOutbox(
   env: Env,
   db: DB,
@@ -48,6 +51,23 @@ export async function drainOutbox(
     .limit(limit);
 
   for (const job of ready) {
+    // Claim the job before running it. Drains run concurrently (cron and any
+    // request that changes the plan), and a job taken twice wrote the same
+    // block to Google twice. Pushing its next attempt forward is the claim:
+    // only the drain whose update matched still owns it.
+    const claimed = await db
+      .update(outbox)
+      .set({ nextAttemptAt: Date.now() + CLAIM_MS })
+      .where(
+        and(
+          eq(outbox.id, job.id),
+          eq(outbox.status, 'pending'),
+          eq(outbox.nextAttemptAt, job.nextAttemptAt),
+        ),
+      )
+      .returning({ id: outbox.id });
+    if (claimed.length === 0) continue;
+
     try {
       await runJob(env, db, job);
       await db

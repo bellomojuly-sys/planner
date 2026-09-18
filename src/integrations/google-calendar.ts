@@ -508,7 +508,14 @@ export async function upsertPlannerEvent(
     colorId: block.colorId ?? '7',
     extendedProperties: { private: { plannerBlockId: block.blockId } },
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 5 }] },
+    // Re-confirms an event with this id that was deleted earlier.
+    status: 'confirmed',
   };
+
+  // The event id is derived from the block id, so writing the same block
+  // twice can only ever update one event. Before this, two drains running at
+  // once each created their own event and left orphans in the calendar.
+  const stableId = plannerEventId(block.blockId);
 
   if (existingEventId) {
     try {
@@ -526,13 +533,77 @@ export async function upsertPlannerEvent(
     }
   }
 
-  const created = await calFetch<any>(
-    env,
-    `/calendars/${encodeURIComponent(calendarId)}/events`,
-    { method: 'POST', body: JSON.stringify(body) },
-    'google.createEvent',
-  );
-  return created.id;
+  try {
+    const created = await calFetch<any>(
+      env,
+      `/calendars/${encodeURIComponent(calendarId)}/events`,
+      { method: 'POST', body: JSON.stringify({ ...body, id: stableId }) },
+      'google.createEvent',
+    );
+    return created.id;
+  } catch (err) {
+    // 409: this block's event already exists — written by a concurrent drain,
+    // or deleted and now being restored. Update it instead of duplicating.
+    if (!(err instanceof PlannerError) || !err.message.includes(': 409')) throw err;
+    const updated = await calFetch<any>(
+      env,
+      `/calendars/${encodeURIComponent(calendarId)}/events/${stableId}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
+      'google.updateEvent',
+    );
+    return updated.id;
+  }
+}
+
+/**
+ * Google accepts client-chosen event ids made of base32hex characters
+ * (0-9, a-v), 5 to 1024 long. A block id is a UUID, whose hex digits are a
+ * subset of that alphabet once the dashes are dropped.
+ */
+export function plannerEventId(blockId: string): string {
+  return `pl${blockId.toLowerCase().replace(/[^0-9a-v]/g, '')}`;
+}
+
+/**
+ * Every event Planner wrote in a calendar, within a window, with the block it
+ * claims to represent. Events without the tag — anything Giulia created by
+ * hand — are never returned, so they can never be cleaned up by mistake.
+ */
+export async function listPlannerEvents(
+  env: Env,
+  calendarId: string,
+  timeMin: number,
+  timeMax: number,
+): Promise<Array<{ eventId: string; plannerBlockId: string }>> {
+  const out: Array<{ eventId: string; plannerBlockId: string }> = [];
+  let pageToken: string | undefined;
+
+  do {
+    const params = new URLSearchParams({
+      timeMin: new Date(timeMin).toISOString(),
+      timeMax: new Date(timeMax).toISOString(),
+      singleEvents: 'true',
+      maxResults: '2500',
+    });
+    if (pageToken) params.set('pageToken', pageToken);
+
+    const res = await calFetch<any>(
+      env,
+      `/calendars/${encodeURIComponent(calendarId)}/events?${params}`,
+      { method: 'GET' },
+      'google.listPlannerEvents',
+    );
+
+    for (const item of res.items ?? []) {
+      const plannerBlockId = item.extendedProperties?.private?.plannerBlockId;
+      if (plannerBlockId && item.status !== 'cancelled') {
+        out.push({ eventId: item.id, plannerBlockId });
+      }
+    }
+    pageToken = res.nextPageToken;
+  } while (pageToken);
+
+  return out;
 }
 
 export async function deletePlannerEvent(
