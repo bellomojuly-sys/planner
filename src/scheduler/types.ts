@@ -47,7 +47,8 @@ export interface UnplacedTask {
     | 'blocked_by_dependency'
     | 'past_due_window'
     | 'cycle'
-    | 'pinned_conflict';
+    | 'pinned_conflict'
+    | 'duplicate';
   detail?: string;
 }
 
@@ -60,7 +61,7 @@ export interface ScheduleInput {
   /** taskId → prerequisite task ids. */
   dependencies: Map<string, { dependsOnId: string; lagMinutes: number }[]>;
   /** Immovable commitments: shifts, lessons, exams. */
-  busy: Interval[];
+  busy: Array<Interval & { isShift?: boolean }>;
   /** Blocks Giulia dragged by hand; treated as busy and re-emitted unchanged. */
   pinnedBlocks: PlacedBlock[];
   /**
@@ -69,7 +70,29 @@ export interface ScheduleInput {
    * treated as still blocked.
    */
   knownTaskEnds?: Map<string, number>;
+  /** How much task work a single day may hold. Defaults in `DEFAULT_LOAD`. */
+  load?: DailyLoad;
 }
+
+/**
+ * The daily ceiling that stops the scheduler from front-loading: without it a
+ * greedy pass fills the first free day to the brim and leaves the rest empty.
+ * Decided in `dl-how-planner-spreads-the-week`.
+ */
+export interface DailyLoad {
+  /** Task minutes on a day without a shift. */
+  freeDayMinutes: number;
+  /** Task minutes on a day with a shift. */
+  shiftDayMinutes: number;
+  /** Largest share of a day one area may take, 0–1. */
+  areaShare: number;
+}
+
+export const DEFAULT_LOAD: DailyLoad = {
+  freeDayMinutes: 240,
+  shiftDayMinutes: 120,
+  areaShare: 0.5,
+};
 
 export interface ScheduleResult {
   blocks: PlacedBlock[];

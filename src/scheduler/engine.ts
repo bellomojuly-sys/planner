@@ -1,13 +1,22 @@
-import { MINUTE_MS, localWeekday, atLocalMinutes, addLocalDays } from '../lib/time';
+import {
+  MINUTE_MS,
+  localWeekday,
+  atLocalMinutes,
+  addLocalDays,
+  localDateKey,
+} from '../lib/time';
 import { buildSlots, SlotPool, ZONE_PREFERENCE } from './slots';
 import { topologicalOrder, type DepMap } from './dependencies';
-import type {
-  PlacedBlock,
-  ScheduleInput,
-  ScheduleResult,
-  SchedulableTask,
-  UnplacedTask,
-  Zone,
+import {
+  DEFAULT_LOAD,
+  type DailyLoad,
+  type PlacedBlock,
+  type ScheduleInput,
+  type ScheduleResult,
+  type SchedulableTask,
+  type Slot,
+  type UnplacedTask,
+  type Zone,
 } from './types';
 
 const DAY_MS = 86_400_000;
@@ -113,6 +122,25 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   const blocks: PlacedBlock[] = [...pinned];
   const breakMs = settings.breakMinutes * MINUTE_MS;
 
+  // A day with a shift has less room for anything else, whatever its free
+  // slots say: the shift already took the energy.
+  const shiftDays = new Set(
+    input.busy
+      .filter((b) => b.isShift)
+      .map((b) => localDateKey(b.start, timezone)),
+  );
+  const budget = new DayBudget(input.load ?? DEFAULT_LOAD, shiftDays);
+  const areaOf = new Map(input.tasks.map((t) => [t.id, t.area]));
+  for (const block of pinned) {
+    if (block.kind !== 'task' || !block.taskId) continue;
+    budget.add(
+      localDateKey(block.start, timezone),
+      areaOf.get(block.taskId) ?? 'general',
+      block.taskId,
+      block.end - block.start,
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Gym first. Evenings are plentiful, and reserving the health commitment
   // before discretionary work is the whole point of having it in settings.
@@ -132,9 +160,31 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   // -------------------------------------------------------------------------
   // Tasks, in dependency order.
   // -------------------------------------------------------------------------
-  const schedulable = input.tasks.filter(
+  const open = input.tasks.filter(
     (t) => !t.pinned && t.status !== 'done' && t.status !== 'cancelled',
   );
+
+  // The same title twice in the same area is almost always a copy — a Notion
+  // import run twice, a task duplicated by hand. Planning both books the work
+  // twice. The most urgent copy is planned; the others are reported so the
+  // duplicate can be removed at the source. Nothing is deleted here.
+  const { kept: schedulable, duplicates } = dedupeTasks(open, (t) =>
+    urgencyScore(t, now, 0),
+  );
+  for (const dup of duplicates) {
+    unplaced.push({
+      taskId: dup.id,
+      title: dup.title,
+      reason: 'duplicate',
+      detail: 'Stesso titolo di un’altra attività della stessa area.',
+    });
+  }
+  if (duplicates.length > 0) {
+    const titles = [...new Set(duplicates.map((d) => `“${d.title}”`))];
+    warnings.push(
+      `Attività duplicate pianificate una volta sola: ${titles.join(', ')}. Elimina le copie in Notion.`,
+    );
+  }
 
   const blockingCount = countBlocked(schedulable, input.dependencies);
   const scoreOf = (t: SchedulableTask) =>
@@ -178,6 +228,7 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     const placed = placeTask({
       task,
       pool,
+      budget,
       settings,
       earliest,
       breakMs,
@@ -283,12 +334,13 @@ function earliestStartFor(
 function placeTask(params: {
   task: SchedulableTask;
   pool: SlotPool;
+  budget: DayBudget;
   settings: ScheduleInput['settings'];
   earliest: number;
   breakMs: number;
   horizonEnd: number;
 }): { blocks: PlacedBlock[]; reason?: UnplacedTask['reason'] } {
-  const { task, pool, settings, earliest, breakMs } = params;
+  const { task, pool, budget, settings, earliest, breakMs } = params;
 
   const totalMs = Math.max(
     settings.minBlockMinutes,
@@ -318,6 +370,7 @@ function placeTask(params: {
     const attempt = tryPlaceParts({
       task,
       pool,
+      budget,
       zones,
       partCount,
       partMs,
@@ -335,6 +388,7 @@ function placeTask(params: {
 function tryPlaceParts(params: {
   task: SchedulableTask;
   pool: SlotPool;
+  budget: DayBudget;
   zones: Zone[];
   partCount: number;
   partMs: number;
@@ -348,6 +402,7 @@ function tryPlaceParts(params: {
   // Probe against a scratch pool so a partial failure leaves no half-placed
   // task and no consumed slots behind.
   const scratch = new SlotPool([...pool.list()]);
+  const scratchBudget = params.budget.clone();
   const out: PlacedBlock[] = [];
   let cursor = params.earliest;
 
@@ -358,10 +413,12 @@ function tryPlaceParts(params: {
       notBefore: cursor,
       notAfter: params.deadline,
       zones,
+      accept: (slot: Slot) => scratchBudget.fits(slot.dayKey, task.area, task.id, partMs),
     });
     if (!found) return null;
 
     scratch.consume(found.slot, found.start, partMs, breakMs);
+    scratchBudget.add(found.slot.dayKey, task.area, task.id, partMs);
     const end = found.start + partMs;
 
     out.push({
@@ -380,12 +437,15 @@ function tryPlaceParts(params: {
     cursor = end;
   }
 
-  // Commit: replay the same consumption against the real pool.
+  // Commit: replay the same consumption against the real pool and budget.
   for (const block of out) {
     const slot = pool
       .list()
       .find((s) => s.start <= block.start && s.end >= block.end);
-    if (slot) pool.consume(slot, block.start, block.end - block.start, breakMs);
+    if (slot) {
+      pool.consume(slot, block.start, block.end - block.start, breakMs);
+      params.budget.add(slot.dayKey, task.area, task.id, block.end - block.start);
+    }
   }
 
   return out;
@@ -456,4 +516,85 @@ function placeGymSessions(params: {
   }
 
   return out;
+}
+
+/**
+ * Minutes of task work already booked per day, per area and per task.
+ *
+ * Three rules, from `dl-how-planner-spreads-the-week`: a day holds at most its
+ * ceiling (less on shift days); one area takes at most a share of it, so MG
+ * cannot swallow every day; and a task gets at most one part per day, so a
+ * fifteen-hour project is spread over the weeks instead of stacked in one.
+ *
+ * A single part larger than a ceiling may still take a day that is otherwise
+ * empty for that rule — otherwise a long unsplittable task could never be
+ * placed at all.
+ */
+export class DayBudget {
+  private total = new Map<string, number>();
+  private byArea = new Map<string, number>();
+  private taskDays = new Set<string>();
+
+  constructor(
+    private readonly load: DailyLoad,
+    private readonly shiftDays: Set<string>,
+  ) {}
+
+  private cap(day: string): number {
+    return (
+      (this.shiftDays.has(day) ? this.load.shiftDayMinutes : this.load.freeDayMinutes) *
+      MINUTE_MS
+    );
+  }
+
+  fits(day: string, area: string, taskId: string, ms: number): boolean {
+    if (this.taskDays.has(`${taskId}|${day}`)) return false;
+
+    const cap = this.cap(day);
+    const used = this.total.get(day) ?? 0;
+    if (used > 0 && used + ms > cap) return false;
+
+    const areaCap = cap * this.load.areaShare;
+    const areaUsed = this.byArea.get(`${day}|${area}`) ?? 0;
+    if (areaUsed > 0 && areaUsed + ms > areaCap) return false;
+
+    return true;
+  }
+
+  add(day: string, area: string, taskId: string, ms: number): void {
+    this.total.set(day, (this.total.get(day) ?? 0) + ms);
+    this.byArea.set(`${day}|${area}`, (this.byArea.get(`${day}|${area}`) ?? 0) + ms);
+    this.taskDays.add(`${taskId}|${day}`);
+  }
+
+  clone(): DayBudget {
+    const copy = new DayBudget(this.load, this.shiftDays);
+    copy.total = new Map(this.total);
+    copy.byArea = new Map(this.byArea);
+    copy.taskDays = new Set(this.taskDays);
+    return copy;
+  }
+}
+
+/** Same normalised title in the same area: keep the most urgent copy. */
+export function dedupeTasks<T extends { id: string; title: string; area: string }>(
+  tasks: T[],
+  score: (t: T) => number,
+): { kept: T[]; duplicates: T[] } {
+  const groups = new Map<string, T[]>();
+  for (const task of tasks) {
+    const key = `${task.area}|${task.title.toLowerCase().replace(/\s+/g, ' ').trim()}`;
+    groups.set(key, [...(groups.get(key) ?? []), task]);
+  }
+
+  const kept: T[] = [];
+  const duplicates: T[] = [];
+  for (const group of groups.values()) {
+    const [best, ...rest] = [...group].sort((a, b) => score(b) - score(a));
+    kept.push(best!);
+    duplicates.push(...rest);
+  }
+  // Preserve the caller's order for everything that stays.
+  const keptIds = new Set(kept.map((t) => t.id));
+  return { kept: tasks.filter((t) => keptIds.has(t.id)), duplicates };
 }

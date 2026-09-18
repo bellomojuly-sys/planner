@@ -141,10 +141,13 @@ export class SlotPool {
     notBefore: number;
     notAfter: number | null;
     zones: Zone[];
+    /** Extra rule a slot must pass, e.g. the day still has budget. */
+    accept?: (slot: Slot) => boolean;
   }): { slot: Slot; start: number } | null {
     for (const zone of params.zones) {
       for (const slot of this.slots) {
         if (slot.zone !== zone) continue;
+        if (params.accept && !params.accept(slot)) continue;
 
         const start = Math.max(slot.start, params.notBefore);
         const end = start + params.durationMs;

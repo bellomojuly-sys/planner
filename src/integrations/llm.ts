@@ -290,7 +290,7 @@ interface ChatCompletion {
  * One chat completion with thinking off. Returns the message text, and turns
  * the ways DeepSeek can fail without an HTTP error into PlannerErrors.
  */
-async function chat(
+export async function chat(
   env: Env,
   label: string,
   body: {

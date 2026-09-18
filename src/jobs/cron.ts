@@ -1,3 +1,4 @@
+import { estimateMissing } from '../services/estimate-missing';
 import { eq } from 'drizzle-orm';
 import { getDb } from '../db/client';
 import { users, jobRuns, settings as settingsTable } from '../db/schema';
@@ -42,6 +43,15 @@ export async function handleScheduled(env: Env): Promise<void> {
         syncNotion(env, db, user.id),
         syncCalendars(env, db, user.id),
       ]);
+
+      // Tasks Notion left without a duration or an energy level get one from
+      // the model, once. A failure here must not stop the plan.
+      try {
+        const estimated = await estimateMissing(env, db, user.id);
+        if (estimated > 0) notionReport.changed = true;
+      } catch (err) {
+        console.warn('[cron] estimate failed:', toPlannerError(err).message);
+      }
 
       const errors = [...notionReport.errors, ...calendarReport.errors];
       if (errors.length > 0) {
