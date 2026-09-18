@@ -303,12 +303,33 @@ export async function subscribeToCalendar(
   env: Env,
   calendarId: string,
 ): Promise<GoogleCalendar> {
-  const entry = await calFetch<any>(
-    env,
-    '/users/me/calendarList',
-    { method: 'POST', body: JSON.stringify({ id: calendarId }) },
-    'google.subscribeToCalendar',
-  );
+  let entry: any;
+  try {
+    entry = await calFetch<any>(
+      env,
+      '/users/me/calendarList',
+      { method: 'POST', body: JSON.stringify({ id: calendarId }) },
+      'google.subscribeToCalendar',
+    );
+  } catch (err) {
+    // Google answers 403/404 both for "not shared with this account" and for
+    // a mistyped id. Either way the credentials are fine, so the message must
+    // not say they expired.
+    if (
+      err instanceof PlannerError &&
+      (err.code === 'config_missing' || err.code === 'not_found')
+    ) {
+      const account = parseServiceAccount(env.GOOGLE_SERVICE_ACCOUNT_JSON)?.client_email;
+      throw new PlannerError('bad_request', {
+        message: `calendar ${calendarId} not reachable: ${err.message}`,
+        userMessage: account
+          ? `Planner non vede questo calendario. Controlla l'ID e condividilo con ${account}.`
+          : "Planner non vede questo calendario. Controlla l'ID e la condivisione.",
+        retryable: false,
+      });
+    }
+    throw err;
+  }
 
   return {
     id: entry.id ?? calendarId,
