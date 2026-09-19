@@ -22,13 +22,19 @@ export function buildSlots(params: {
   to: number;
   timezone: string;
   settings: Settings;
-  busy: Interval[];
+  busy: Array<
+    Interval & { travelBeforeMinutes?: number; travelAfterMinutes?: number }
+  >;
 }): Slot[] {
   const { from, to, timezone, settings } = params;
 
   const padded = params.busy.map((b) => ({
-    start: b.start - settings.bufferAroundEventsMinutes * MINUTE_MS,
-    end: b.end + settings.bufferAroundEventsMinutes * MINUTE_MS,
+    start:
+      b.start -
+      (b.travelBeforeMinutes ?? settings.bufferAroundEventsMinutes) * MINUTE_MS,
+    end:
+      b.end +
+      (b.travelAfterMinutes ?? settings.bufferAroundEventsMinutes) * MINUTE_MS,
   }));
   const busy = mergeIntervals(padded);
 
@@ -37,10 +43,18 @@ export function buildSlots(params: {
 
   // Hard stop guards against a pathological horizon or a DST bug looping.
   for (let guard = 0; guard < 400 && cursor < to; guard++) {
+    // 01:00 sleep + 8h target + 30m wake buffer = 09:30 ready time. The
+    // configured day start remains a lower bound for users with an earlier
+    // sleep rhythm, but cannot silently cut the sleep target.
+    const restedStartMinutes =
+      (settings.sleepStartMinutes +
+        settings.sleepTargetMinutes +
+        settings.wakeBufferMinutes) %
+      (24 * 60);
     const dayStart = atLocalMinutes(
       cursor,
       timezone,
-      settings.dayStartMinutes,
+      Math.max(settings.dayStartMinutes, restedStartMinutes),
     );
     const dayEnd = atLocalMinutes(cursor, timezone, settings.dayEndMinutes);
     const morningEnd = atLocalMinutes(

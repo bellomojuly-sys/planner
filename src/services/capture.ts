@@ -233,6 +233,11 @@ async function createTask(
       estimateSource: 'claude',
       estimateConfidence: learned.confidence,
       dueAt,
+      location: intent.location ?? null,
+      travelMinutes: intent.travelMinutes ?? 0,
+      preparationMinutes: intent.preparationMinutes ?? 0,
+      recoveryMinutes: intent.recoveryMinutes ?? 0,
+      flexibility: intent.flexibility ?? 'high',
       status: 'todo',
       isGym: /palestra|allenamento|gym|corsa|nuoto/i.test(intent.title),
       dirty: true,
@@ -333,7 +338,10 @@ async function completeTask(
       await db.insert(outbox).values({
         userId,
         kind: 'google_delete',
-        payload: { eventId: block.googleEventId, calendarId: plannerCalendarId },
+        payload: {
+          eventId: block.googleEventId,
+          calendarId: block.calendarId ?? plannerCalendarId,
+        },
       });
     }
   }

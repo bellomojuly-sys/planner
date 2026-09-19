@@ -100,10 +100,17 @@ export function Tasks({ onChanged }: { onChanged: () => void }) {
                 energia {ENERGY_LABELS[task.energy]}
                 {task.dueAt && ` · entro ${dayShort(task.dueAt)}`}
                 {task.actualMinutes && ` · reali ${duration(task.actualMinutes)}`}
+                {task.location && ` · ${task.location}`}
+                {(task.travelMinutes + task.preparationMinutes + task.recoveryMinutes) > 0 &&
+                  ` · buffer ${duration(
+                    task.travelMinutes +
+                      task.preparationMinutes +
+                      task.recoveryMinutes,
+                  )}`}
               </div>
             </div>
 
-            <span className="chip">P{task.priority}</span>
+            <span className="chip">{task.status === 'skipped' ? 'saltata' : task.status === 'postponed' ? 'rimandata' : `P${task.priority}`}</span>
           </li>
         ))}
       </ul>
@@ -119,6 +126,11 @@ function NewTaskForm({ onCreated }: { onCreated: () => void }) {
     priority: 3,
     estimatedMinutes: 30,
     dueAt: '',
+    location: '',
+    travelMinutes: 0,
+    preparationMinutes: 0,
+    recoveryMinutes: 0,
+    flexibility: 'high',
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -200,6 +212,29 @@ function NewTaskForm({ onCreated }: { onCreated: () => void }) {
           onChange={(e) => setDraft({ ...draft, dueAt: e.target.value })}
         />
       </label>
+
+      <label className="field">
+        <span>Luogo</span>
+        <input
+          value={draft.location}
+          onChange={(e) => setDraft({ ...draft, location: e.target.value })}
+        />
+      </label>
+
+      <div className="row">
+        <label className="field">
+          <span>Viaggio (min)</span>
+          <input type="number" min={0} max={240} value={draft.travelMinutes} onChange={(e) => setDraft({ ...draft, travelMinutes: Number(e.target.value) })} />
+        </label>
+        <label className="field">
+          <span>Preparazione (min)</span>
+          <input type="number" min={0} max={240} value={draft.preparationMinutes} onChange={(e) => setDraft({ ...draft, preparationMinutes: Number(e.target.value) })} />
+        </label>
+        <label className="field">
+          <span>Recupero (min)</span>
+          <input type="number" min={0} max={240} value={draft.recoveryMinutes} onChange={(e) => setDraft({ ...draft, recoveryMinutes: Number(e.target.value) })} />
+        </label>
+      </div>
 
       {error && (
         <div className="banner" data-tone="error">

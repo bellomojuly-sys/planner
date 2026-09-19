@@ -47,6 +47,11 @@ const TaskInput = z.object({
   energy: z.enum(ENERGY).default('medium'),
   priority: z.number().int().min(1).max(4).default(3),
   estimatedMinutes: z.number().int().min(5).max(600).default(30),
+  location: z.string().max(200).nullable().optional(),
+  travelMinutes: z.number().int().min(0).max(240).default(0),
+  preparationMinutes: z.number().int().min(0).max(240).default(0),
+  recoveryMinutes: z.number().int().min(0).max(240).default(0),
+  flexibility: z.enum(['fixed', 'low', 'medium', 'high']).default('high'),
   dueAt: z.number().int().nullable().optional(),
   splittable: z.boolean().default(true),
   isGym: z.boolean().default(false),
@@ -90,7 +95,20 @@ taskRoutes.patch('/:id', requireAuth('full'), async (c) => {
   const id = c.req.param('id');
 
   const body = TaskInput.partial()
-    .extend({ status: z.enum(['inbox', 'todo', 'scheduled', 'in_progress', 'done', 'cancelled']).optional() })
+    .extend({
+      status: z
+        .enum([
+          'inbox',
+          'todo',
+          'scheduled',
+          'in_progress',
+          'done',
+          'skipped',
+          'postponed',
+          'cancelled',
+        ])
+        .optional(),
+    })
     .parse(await c.req.json());
 
   const existing = await db.query.tasks.findFirst({

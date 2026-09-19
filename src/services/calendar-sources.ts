@@ -6,6 +6,7 @@ import {
   calendarSyncState,
   outbox,
   scheduledBlocks,
+  type Area,
 } from '../db/schema';
 import {
   listCalendars,
@@ -264,6 +265,51 @@ export async function getPlannerCalendarId(db: DB, userId: string): Promise<stri
   return source?.calendarId ?? 'primary';
 }
 
+export async function getCalendarRoutingMap(
+  db: DB,
+  userId: string,
+): Promise<{ fallback: string; byArea: Partial<Record<Area | 'gym', string>> }> {
+  const [fallback, sources] = await Promise.all([
+    getPlannerCalendarId(db, userId),
+    loadCalendarSources(db, userId),
+  ]);
+  const writable = sources.filter(
+    (source) =>
+      source.enabled && source.kind === 'google' && canWriteCalendar(source.accessRole),
+  );
+  const aliases: Record<Area | 'gym', string[]> = {
+    university: ['university', 'universita', 'study', 'studio'],
+    mg: ['mg integration', 'mg', 'work', 'lavoro'],
+    heemia: ['heemia', 'projects', 'progetti'],
+    career: ['career', 'carriera'],
+    personal: ['personal', 'personale'],
+    health: ['health', 'salute'],
+    errand: ['appointments', 'appuntamenti', 'commissioni'],
+    general: ['planner', 'tasks', 'attivita'],
+    gym: ['gym', 'palestra', 'fitness'],
+  };
+  const byArea: Partial<Record<Area | 'gym', string>> = {};
+  for (const [key, names] of Object.entries(aliases) as Array<
+    [Area | 'gym', string[]]
+  >) {
+    const match = writable.find((source) => {
+      const name = normalizeCalendarName(source.summary);
+      return names.includes(name) || names.some((alias) => name.includes(alias));
+    });
+    if (match) byArea[key] = match.calendarId;
+  }
+  return { fallback, byArea };
+}
+
+function normalizeCalendarName(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 export async function updateCalendarSource(
   db: DB,
   userId: string,
@@ -332,6 +378,15 @@ export async function updateCalendarSource(
       .where(eq(scheduledBlocks.userId, userId));
 
     for (const block of blocks) {
+      // A category-routed block belongs to its own calendar and must not be
+      // swept when only the fallback Planner calendar changes.
+      if (
+        previous &&
+        block.calendarId &&
+        block.calendarId !== previous.calendarId
+      ) {
+        continue;
+      }
       if (block.googleEventId && previous) {
         await db.insert(outbox).values({
           userId,
@@ -345,7 +400,12 @@ export async function updateCalendarSource(
 
       await db
         .update(scheduledBlocks)
-        .set({ googleEventId: null, syncState: 'pending', syncError: null })
+        .set({
+          googleEventId: null,
+          calendarId: source.calendarId,
+          syncState: 'pending',
+          syncError: null,
+        })
         .where(eq(scheduledBlocks.id, block.id));
       await db.insert(outbox).values({
         userId,

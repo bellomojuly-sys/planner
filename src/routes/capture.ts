@@ -4,7 +4,7 @@ import type { AppBindings } from '../auth/middleware';
 import { requireAuth } from '../auth/middleware';
 import { handleCapture } from '../services/capture';
 import { drainOutbox } from '../services/outbox';
-import { loadAgenda } from '../jobs/daily';
+import { loadAgenda, renderVoiceAgenda } from '../jobs/daily';
 import { formatRange } from '../lib/time';
 
 export const captureRoutes = new Hono<AppBindings>();
@@ -76,6 +76,20 @@ captureRoutes.post('/text', requireAuth('capture'), async (c) => {
   });
 
   c.executionCtx.waitUntil(drainOutbox(c.env, c.get('db')));
+
+  // A question ("cosa devo fare oggi?") gets today's remaining agenda, so the
+  // same dictation shortcut both changes the plan and reads it back. Anything
+  // it also changed in the same sentence is said first.
+  if (result.answer) {
+    const agenda = await loadAgenda(
+      c.get('db'),
+      c.get('auth').userId,
+      c.env.APP_TIMEZONE,
+      Date.now(),
+    );
+    const done = result.applied.length > 0 ? `${result.applied.join('. ')}. ` : '';
+    return c.text(done + renderVoiceAgenda(agenda, c.env.APP_TIMEZONE));
+  }
 
   return c.text(
     result.applied.length > 0 ? result.applied.join('. ') : result.summary,

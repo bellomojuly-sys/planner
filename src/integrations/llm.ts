@@ -31,6 +31,11 @@ const IntentSchema = z.discriminatedUnion('kind', [
     energy: z.enum(ENERGY).optional(),
     priority: z.number().int().min(1).max(4).optional(),
     estimatedMinutes: z.number().int().min(5).max(600).optional(),
+    location: z.string().max(200).optional(),
+    travelMinutes: z.number().int().min(0).max(240).optional(),
+    preparationMinutes: z.number().int().min(0).max(240).optional(),
+    recoveryMinutes: z.number().int().min(0).max(240).optional(),
+    flexibility: z.enum(['fixed', 'low', 'medium', 'high']).optional(),
     /** ISO date or a relative phrase already resolved by the model. */
     dueAt: z.string().optional(),
     dependsOnTitles: z.array(z.string()).optional(),
@@ -144,6 +149,14 @@ const JSON_SCHEMA = {
             description: '1 = urgentissimo, 4 = quando capita.',
           },
           estimatedMinutes: { type: 'integer' },
+          location: { type: 'string' },
+          travelMinutes: { type: 'integer' },
+          preparationMinutes: { type: 'integer' },
+          recoveryMinutes: { type: 'integer' },
+          flexibility: {
+            type: 'string',
+            enum: ['fixed', 'low', 'medium', 'high'],
+          },
           dueAt: {
             type: 'string',
             description: 'Data ISO 8601 (YYYY-MM-DD o completa).',
@@ -201,12 +214,14 @@ COME INTERPRETARE
 - Se davvero non è chiaro cosa intende, usa unclear e spiega perché in italiano.
 
 STIME
-Per ogni create_task stima sempre area, energy, priority ed estimatedMinutes.
+Per ogni create_task stima sempre area, energy, priority, estimatedMinutes e flexibility. Quando il testo lo permette estrai anche location, travelMinutes, preparationMinutes e recoveryMinutes.
 - energy alta: lavoro che richiede concentrazione profonda (scrivere, progettare, studiare, analizzare).
 - energy media: riunioni, email, revisioni, amministrazione.
 - energy bassa: commissioni, riordino, telefonate brevi, palestra.
 - priority 1 solo se c'è una scadenza imminente o lo dice esplicitamente ("urgente", "subito").
 - estimatedMinutes: sii realistica, arrotonda a multipli di 15. Non stimare mai meno di 10 minuti.
+- flexibility fixed solo per un orario esterno già imposto; low per attività difficili da spostare; medium/high per lavoro flessibile.
+- travelMinutes è il viaggio di andata. preparationMinutes include preparazione necessaria prima; recoveryMinutes include doccia, cambio o decompressione dopo.
 
 DATE
 Risolvi sempre i riferimenti relativi in date ISO usando la data di oggi. "domani", "venerdì", "fine mese" diventano YYYY-MM-DD.

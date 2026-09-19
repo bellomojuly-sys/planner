@@ -143,10 +143,15 @@ async function googleUpsert(
     calendarId,
     {
       blockId: block.id,
-      title: block.kind === 'gym' ? `🏋️ ${block.title}` : block.title,
+      title:
+        block.kind === 'gym'
+          ? `🏋️ ${block.title}`
+          : block.kind === 'buffer'
+            ? `↔️ ${block.title}`
+            : block.title,
       startAt: block.startAt,
       endAt: block.endAt,
-      colorId: block.kind === 'gym' ? '10' : '7',
+      colorId: block.kind === 'gym' ? '10' : block.kind === 'buffer' ? '8' : '7',
     },
     block.googleEventId,
     env.APP_TIMEZONE,

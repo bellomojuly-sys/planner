@@ -14,6 +14,11 @@ export interface SchedulableTask {
   title: string;
   area: Area;
   energy: Energy;
+  location?: string | null;
+  travelMinutes?: number;
+  preparationMinutes?: number;
+  recoveryMinutes?: number;
+  flexibility?: 'fixed' | 'low' | 'medium' | 'high';
   priority: number;
   plannedMinutes: number;
   dueAt: number | null;
@@ -33,12 +38,14 @@ export interface PlacedBlock {
   title: string;
   start: number;
   end: number;
-  kind: 'task' | 'gym';
+  kind: 'task' | 'gym' | 'buffer';
   zone: Zone;
   partIndex: number;
   partCount: number;
   /** True when the task could not get its preferred energy zone. */
   zoneCompromised: boolean;
+  /** Category is data, independent from the Google Calendar colour. */
+  area?: Area;
 }
 
 export interface UnplacedTask {
@@ -63,7 +70,15 @@ export interface ScheduleInput {
   /** taskId → prerequisite task ids. */
   dependencies: Map<string, { dependsOnId: string; lagMinutes: number }[]>;
   /** Immovable commitments: shifts, lessons, exams. */
-  busy: Array<Interval & { isShift?: boolean }>;
+  busy: Array<
+    Interval & {
+      isShift?: boolean;
+      location?: string | null;
+      /** Explicit asymmetric padding beats the generic event buffer. */
+      travelBeforeMinutes?: number;
+      travelAfterMinutes?: number;
+    }
+  >;
   /** Blocks Giulia dragged by hand; treated as busy and re-emitted unchanged. */
   pinnedBlocks: PlacedBlock[];
   /**
@@ -72,6 +87,8 @@ export interface ScheduleInput {
    * treated as still blocked.
    */
   knownTaskEnds?: Map<string, number>;
+  /** Completed workouts in the recent week still count toward the target. */
+  completedGymAt?: number[];
   /** How much task work a single day may hold. Defaults in `DEFAULT_LOAD`. */
   load?: DailyLoad;
 }

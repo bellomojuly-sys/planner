@@ -154,6 +154,7 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     horizonEnd,
     breakMs,
     alreadyScheduled: explicitGym.length,
+    completedGymAt: input.completedGymAt ?? [],
   });
   blocks.push(...gymBlocks);
 
@@ -212,7 +213,8 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   }
 
   for (const task of order) {
-    if (task.isGym) continue; // handled above
+    // Explicit gym tasks are still scheduled: they count toward the weekly
+    // target above, while preserving a user-supplied duration/deadline.
 
     const earliest = earliestStartFor(task, input.dependencies, taskEnd, now);
     if (earliest === null) {
@@ -413,8 +415,15 @@ function tryPlaceParts(params: {
   let cursor = params.earliest;
 
   for (let part = 0; part < partCount; part++) {
+    const beforeMs =
+      part === 0
+        ? ((task.travelMinutes ?? 0) + (task.preparationMinutes ?? 0)) * MINUTE_MS
+        : 0;
+    const afterMs =
+      part === partCount - 1 ? (task.recoveryMinutes ?? 0) * MINUTE_MS : 0;
+    const reservedMs = beforeMs + partMs + afterMs;
     const found = scratch.find({
-      durationMs: partMs,
+      durationMs: reservedMs,
       breakMs,
       notBefore: cursor,
       notAfter: params.deadline,
@@ -423,21 +432,23 @@ function tryPlaceParts(params: {
     });
     if (!found) return null;
 
-    scratch.consume(found.slot, found.start, partMs, breakMs);
+    scratch.consume(found.slot, found.start, reservedMs, breakMs);
     scratchBudget.add(found.slot.dayKey, task.area, task.id, partMs);
-    const end = found.start + partMs;
+    const taskStart = found.start + beforeMs;
+    const end = taskStart + partMs;
 
     out.push({
       taskId: task.id,
       title:
         partCount > 1 ? `${task.title} (${part + 1}/${partCount})` : task.title,
-      start: found.start,
+      start: taskStart,
       end,
       kind: 'task',
       zone: found.slot.zone,
       partIndex: part,
       partCount,
       zoneCompromised: params.compromised,
+      area: task.area,
     });
 
     cursor = end;
@@ -445,11 +456,25 @@ function tryPlaceParts(params: {
 
   // Commit: replay the same consumption against the real pool and budget.
   for (const block of out) {
+    const beforeMs =
+      block.partIndex === 0
+        ? ((task.travelMinutes ?? 0) + (task.preparationMinutes ?? 0)) * MINUTE_MS
+        : 0;
+    const afterMs =
+      block.partIndex === block.partCount - 1
+        ? (task.recoveryMinutes ?? 0) * MINUTE_MS
+        : 0;
+    const reservationStart = block.start - beforeMs;
+    const reservationDuration = beforeMs + (block.end - block.start) + afterMs;
     const slot = pool
       .list()
-      .find((s) => s.start <= block.start && s.end >= block.end);
+      .find(
+        (s) =>
+          s.start <= reservationStart &&
+          s.end >= reservationStart + reservationDuration,
+      );
     if (slot) {
-      pool.consume(slot, block.start, block.end - block.start, breakMs);
+      pool.consume(slot, reservationStart, reservationDuration, breakMs);
       params.budget.add(slot.dayKey, task.area, task.id, block.end - block.start);
     }
   }
@@ -458,8 +483,9 @@ function tryPlaceParts(params: {
 }
 
 /**
- * Reserves the weekly gym sessions in evening slots on the preferred weekdays,
- * falling back to any evening when a preferred day is already full.
+ * Reserves complete door-to-door gym sessions: outward travel, workout,
+ * shower/change and return. Preferred days win, avoided days are excluded,
+ * and a configurable recovery interval separates sessions.
  */
 function placeGymSessions(params: {
   pool: SlotPool;
@@ -469,14 +495,35 @@ function placeGymSessions(params: {
   horizonEnd: number;
   breakMs: number;
   alreadyScheduled: number;
+  completedGymAt: number[];
 }): PlacedBlock[] {
-  const { pool, settings, timezone, now, horizonEnd, breakMs } = params;
+  const {
+    pool,
+    settings,
+    timezone,
+    now,
+    horizonEnd,
+    breakMs,
+    alreadyScheduled,
+    completedGymAt,
+  } = params;
   if (settings.gymSessionsPerWeek <= 0) return [];
 
-  const durationMs = settings.gymDurationMinutes * MINUTE_MS;
+  const workoutMs = settings.gymDurationMinutes * MINUTE_MS;
+  const outwardMs = settings.gymTravelMinutes * MINUTE_MS;
+  const preparationMs = settings.gymPreparationMinutes * MINUTE_MS;
+  const returnMs = settings.gymReturnMinutes * MINUTE_MS;
+  const durationMs = outwardMs + workoutMs + preparationMs + returnMs;
   // Stored as ISO weekdays (1 = Monday); JS getDay() uses 0 = Sunday.
   const preferred = new Set(
     settings.gymPreferredDays
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n >= 1 && n <= 7)
+      .map((iso) => (iso === 7 ? 0 : iso)),
+  );
+  const avoided = new Set(
+    settings.gymAvoidDays
       .split(',')
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isFinite(n) && n >= 1 && n <= 7)
@@ -486,39 +533,85 @@ function placeGymSessions(params: {
   const out: PlacedBlock[] = [];
   const perWeek = new Map<number, number>();
 
-  let day = now;
-  for (let guard = 0; guard < 400 && day < horizonEnd; guard++) {
-    const weekIndex = Math.floor((day - now) / (7 * DAY_MS));
-    const done = perWeek.get(weekIndex) ?? 0;
+  const days: number[] = [];
+  for (let day = now, guard = 0; guard < 400 && day < horizonEnd; guard++) {
+    days.push(day);
+    day = addLocalDays(day, timezone, 1);
+  }
 
-    if (done < settings.gymSessionsPerWeek && preferred.has(localWeekday(day, timezone))) {
+  const weekCount = Math.ceil(days.length / 7);
+  let lastWorkoutEnd = Math.max(Number.NEGATIVE_INFINITY, ...completedGymAt);
+  for (let weekIndex = 0; weekIndex < weekCount; weekIndex++) {
+    const target = Math.min(
+      settings.gymSessionsPerWeek,
+      settings.gymMaxSessionsPerWeek,
+    );
+    const recentlyCompleted =
+      weekIndex === 0
+        ? completedGymAt.filter(
+            (completedAt) => completedAt <= now && completedAt > now - 7 * DAY_MS,
+          ).length
+        : 0;
+    perWeek.set(
+      weekIndex,
+      weekIndex === 0
+        ? Math.min(alreadyScheduled + recentlyCompleted, target)
+        : 0,
+    );
+    const weekDays = days.slice(weekIndex * 7, weekIndex * 7 + 7);
+    const candidates = [
+      ...weekDays.filter((day) => preferred.has(localWeekday(day, timezone))),
+      ...weekDays.filter((day) => !preferred.has(localWeekday(day, timezone))),
+    ].filter((day) => !avoided.has(localWeekday(day, timezone)));
+
+    for (const day of candidates) {
+      const done = perWeek.get(weekIndex) ?? 0;
+      if (done >= target) break;
+
       const dayStart = atLocalMinutes(day, timezone, 0);
       const found = pool.find({
         durationMs,
         breakMs,
-        notBefore: Math.max(now, dayStart),
+        notBefore: Math.max(
+          now,
+          dayStart,
+          lastWorkoutEnd + settings.gymMinRecoveryHours * 60 * MINUTE_MS,
+        ),
         notAfter: dayStart + DAY_MS,
         zones: ['evening', 'afternoon'],
       });
+      if (!found) continue;
 
-      if (found) {
-        pool.consume(found.slot, found.start, durationMs, breakMs);
+      pool.consume(found.slot, found.start, durationMs, breakMs);
+      const components: Array<{
+        title: string;
+        ms: number;
+        kind: PlacedBlock['kind'];
+      }> = [
+        { title: 'Viaggio verso palestra', ms: outwardMs, kind: 'buffer' },
+        { title: 'Palestra', ms: workoutMs, kind: 'gym' },
+        { title: 'Doccia / cambio', ms: preparationMs, kind: 'buffer' },
+        { title: 'Ritorno dalla palestra', ms: returnMs, kind: 'buffer' },
+      ];
+      let cursor = found.start;
+      components.forEach((component, partIndex) => {
+        if (component.ms <= 0) return;
         out.push({
           taskId: null,
-          title: 'Palestra',
-          start: found.start,
-          end: found.start + durationMs,
-          kind: 'gym',
+          title: component.title,
+          start: cursor,
+          end: cursor + component.ms,
+          kind: component.kind,
           zone: found.slot.zone,
-          partIndex: 0,
-          partCount: 1,
+          partIndex,
+          partCount: components.filter((item) => item.ms > 0).length,
           zoneCompromised: found.slot.zone !== 'evening',
         });
-        perWeek.set(weekIndex, done + 1);
-      }
+        cursor += component.ms;
+      });
+      lastWorkoutEnd = found.start + outwardMs + workoutMs;
+      perWeek.set(weekIndex, done + 1);
     }
-
-    day = addLocalDays(day, timezone, 1);
   }
 
   return out;

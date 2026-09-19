@@ -739,7 +739,14 @@ export async function loadBusyIntervals(
   userId: string,
   from: number,
   to: number,
-): Promise<Array<{ start: number; end: number; isShift: boolean }>> {
+): Promise<
+  Array<{
+    start: number;
+    end: number;
+    isShift: boolean;
+    location: string | null;
+  }>
+> {
   const rows = await db
     .select()
     .from(calendarEvents)
@@ -753,7 +760,12 @@ export async function loadBusyIntervals(
 
   return rows
     .filter((e) => !e.cancelled && !e.allDay && e.startAt < to)
-    .map((e) => ({ start: e.startAt, end: e.endAt, isShift: e.isShift }));
+    .map((e) => ({
+      start: e.startAt,
+      end: e.endAt,
+      isShift: e.isShift,
+      location: e.location,
+    }));
 }
 
 export { PlannerError };

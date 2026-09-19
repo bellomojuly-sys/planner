@@ -8,7 +8,13 @@ import {
   parsePhase,
   type DepMap,
 } from '../src/scheduler/dependencies';
-import { subtractIntervals, mergeIntervals, localMinutes } from '../src/lib/time';
+import {
+  subtractIntervals,
+  mergeIntervals,
+  localMinutes,
+  localWeekday,
+  localDateKey,
+} from '../src/lib/time';
 import type { SchedulableTask } from '../src/scheduler/types';
 import type { Settings } from '../src/db/schema';
 
@@ -21,6 +27,9 @@ const settings: Settings = {
   userId: 'u1',
   dayStartMinutes: 7 * 60,
   dayEndMinutes: 22 * 60 + 30,
+  sleepStartMinutes: 60,
+  sleepTargetMinutes: 8 * 60,
+  wakeBufferMinutes: 30,
   morningEndMinutes: 13 * 60,
   afternoonEndMinutes: 18 * 60,
   minBlockMinutes: 20,
@@ -28,8 +37,14 @@ const settings: Settings = {
   breakMinutes: 10,
   bufferAroundEventsMinutes: 15,
   gymSessionsPerWeek: 0,
+  gymMaxSessionsPerWeek: 4,
   gymDurationMinutes: 75,
   gymPreferredDays: '1,3,5',
+  gymAvoidDays: '',
+  gymTravelMinutes: 25,
+  gymPreparationMinutes: 20,
+  gymReturnMinutes: 25,
+  gymMinRecoveryHours: 36,
   briefingMinutes: 7 * 60,
   reviewMinutes: 20 * 60 + 30,
   reviewAfterShiftMinutes: 30,
@@ -113,6 +128,18 @@ describe('interval maths', () => {
 });
 
 describe('slot generation', () => {
+  it('does not create productive time before sleep target and wake buffer', () => {
+    const slots = buildSlots({
+      from: MONDAY,
+      to: MONDAY + 86_400_000,
+      timezone: TZ,
+      settings,
+      busy: [],
+    });
+
+    expect(localMinutes(slots[0]!.start, TZ)).toBe(9 * 60 + 30);
+  });
+
   it('never produces a slot spanning two energy zones', () => {
     const slots = buildSlots({
       from: MONDAY,
@@ -370,6 +397,25 @@ describe('phase inference', () => {
 });
 
 describe('splitting and capacity', () => {
+  it('reserves travel, preparation and recovery around a task', () => {
+    const result = run([
+      task({
+        id: 'appointment-work',
+        energy: 'high',
+        plannedMinutes: 60,
+        travelMinutes: 20,
+        preparationMinutes: 10,
+        recoveryMinutes: 30,
+      }),
+      task({ id: 'next', energy: 'high', plannedMinutes: 60 }),
+    ]);
+    const first = result.blocks.find((b) => b.taskId === 'appointment-work')!;
+    const next = result.blocks.find((b) => b.taskId === 'next')!;
+
+    expect(localMinutes(first.start, TZ)).toBeGreaterThanOrEqual(10 * 60);
+    expect(next.start - first.end).toBeGreaterThanOrEqual(30 * 60_000);
+  });
+
   it('splits work longer than the maximum block, in order', () => {
     const result = run([task({ id: 'long', plannedMinutes: 240, energy: 'medium' })]);
     const parts = result.blocks.filter((b) => b.taskId === 'long');
@@ -484,6 +530,38 @@ describe('gym', () => {
       expect(localMinutes(session.start, TZ)).toBeGreaterThanOrEqual(18 * 60);
       expect(session.end - session.start).toBe(75 * 60_000);
     }
+
+    const firstDay = localDateKey(gym[0]!.start, TZ);
+    const doorToDoor = result.blocks.filter(
+      (block) => localDateKey(block.start, TZ) === firstDay && block.taskId === null,
+    );
+    expect(doorToDoor.map((block) => block.title)).toEqual([
+      'Viaggio verso palestra',
+      'Palestra',
+      'Doccia / cambio',
+      'Ritorno dalla palestra',
+    ]);
+    expect(
+      (doorToDoor.at(-1)!.end - doorToDoor[0]!.start) / 60_000,
+    ).toBe(145);
+  });
+
+  it('falls back from preferred days but never uses avoided days', () => {
+    const mondayEvening = {
+      start: Date.parse('2026-01-12T17:00:00Z'),
+      end: Date.parse('2026-01-12T22:00:00Z'),
+    };
+    const result = run([], {
+      settingsOverride: {
+        gymSessionsPerWeek: 1,
+        gymMaxSessionsPerWeek: 1,
+        gymPreferredDays: '1',
+        gymAvoidDays: '2',
+      },
+      busy: [mondayEvening],
+    });
+    const gym = result.blocks.find((block) => block.kind === 'gym')!;
+    expect(localWeekday(gym.start, TZ)).not.toBe(2);
   });
 
   it('does not schedule gym when the weekly target is zero', () => {
@@ -491,6 +569,25 @@ describe('gym', () => {
       settingsOverride: { gymSessionsPerWeek: 0 },
     });
     expect(result.blocks.some((b) => b.kind === 'gym')).toBe(false);
+  });
+
+  it('counts completed workouts toward the current weekly target', () => {
+    const result = schedule({
+      now: MONDAY,
+      horizonEnd: MONDAY + 7 * 86_400_000,
+      timezone: TZ,
+      settings: {
+        ...settings,
+        gymSessionsPerWeek: 3,
+        gymMaxSessionsPerWeek: 4,
+      },
+      tasks: [],
+      dependencies: new Map(),
+      busy: [],
+      pinnedBlocks: [],
+      completedGymAt: [MONDAY - 24 * 3_600_000],
+    });
+    expect(result.blocks.filter((block) => block.kind === 'gym')).toHaveLength(2);
   });
 });
 

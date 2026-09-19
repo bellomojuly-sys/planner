@@ -4,6 +4,9 @@ import { api, ApiError, type SettingsView } from '../lib/api';
 const NUMERIC_FIELDS: Array<{ key: string; label: string; hint?: string }> = [
   { key: 'dayStartMinutes', label: 'Inizio giornata', hint: 'minuti da mezzanotte' },
   { key: 'dayEndMinutes', label: 'Fine giornata' },
+  { key: 'sleepStartMinutes', label: 'Ora abituale del sonno' },
+  { key: 'sleepTargetMinutes', label: 'Sonno necessario (min)' },
+  { key: 'wakeBufferMinutes', label: 'Preparazione dopo il risveglio (min)' },
   { key: 'morningEndMinutes', label: 'Fine mattina (lavoro impegnativo prima)' },
   { key: 'afternoonEndMinutes', label: 'Fine pomeriggio (lavoro medio prima)' },
   { key: 'minBlockMinutes', label: 'Blocco minimo (min)' },
@@ -11,7 +14,12 @@ const NUMERIC_FIELDS: Array<{ key: string; label: string; hint?: string }> = [
   { key: 'breakMinutes', label: 'Pausa fra blocchi (min)' },
   { key: 'bufferAroundEventsMinutes', label: 'Margine attorno agli impegni fissi (min)' },
   { key: 'gymSessionsPerWeek', label: 'Palestra a settimana' },
+  { key: 'gymMaxSessionsPerWeek', label: 'Massimo palestra a settimana' },
   { key: 'gymDurationMinutes', label: 'Durata palestra (min)' },
+  { key: 'gymTravelMinutes', label: 'Viaggio verso palestra (min)' },
+  { key: 'gymPreparationMinutes', label: 'Doccia/cambio palestra (min)' },
+  { key: 'gymReturnMinutes', label: 'Ritorno dalla palestra (min)' },
+  { key: 'gymMinRecoveryHours', label: 'Recupero minimo tra allenamenti (ore)' },
   { key: 'briefingMinutes', label: 'Ora del briefing' },
   { key: 'reviewMinutes', label: 'Ora della revisione' },
   { key: 'reviewAfterShiftMinutes', label: 'Minuti dopo il turno per la revisione' },
@@ -258,6 +266,14 @@ export function Settings({ onChanged }: { onChanged: () => void }) {
           <input
             value={String(draft.gymPreferredDays ?? '')}
             onChange={(e) => setDraft({ ...draft, gymPreferredDays: e.target.value })}
+          />
+        </label>
+
+        <label className="field">
+          <span>Giorni da evitare per la palestra (1 = lunedì … 7 = domenica)</span>
+          <input
+            value={String(draft.gymAvoidDays ?? '')}
+            onChange={(e) => setDraft({ ...draft, gymAvoidDays: e.target.value })}
           />
         </label>
 

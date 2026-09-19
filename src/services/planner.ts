@@ -20,7 +20,7 @@ import type {
 } from '../scheduler/types';
 import type { DepMap } from '../scheduler/dependencies';
 import { loadBusyIntervals, inferPhaseDependencies } from './sync';
-import { getPlannerCalendarId } from './calendar-sources';
+import { getCalendarRoutingMap, getPlannerCalendarId } from './calendar-sources';
 import { DAY_MS, localDateKey, formatRange } from '../lib/time';
 import { toPlannerError } from '../lib/errors';
 import type { Env } from '../env';
@@ -135,12 +135,20 @@ export async function replan(
     const now = Date.now();
     const horizonEnd = now + prefs.planningHorizonDays * DAY_MS;
 
-    const [openTasks, deps, busy, existingBlocks, plannerCalendarId] = await Promise.all([
+    const [
+      openTasks,
+      deps,
+      busy,
+      existingBlocks,
+      calendarRouting,
+      completedGymAt,
+    ] = await Promise.all([
       loadSchedulableTasks(db, userId),
       loadDependencies(db, userId),
       loadBusyIntervals(db, userId, now, horizonEnd),
       loadFutureBlocks(db, userId, now),
-      getPlannerCalendarId(db, userId),
+      getCalendarRoutingMap(db, userId),
+      loadCompletedGymAt(db, userId, Date.now()),
     ]);
 
     const pinnedBlocks: PlacedBlock[] = existingBlocks
@@ -161,6 +169,7 @@ export async function replan(
       busy,
       pinnedBlocks,
       knownTaskEnds,
+      completedGymAt,
     });
 
     const preview = previewPlanDiff(existingBlocks, result, prefs.timezone);
@@ -201,7 +210,7 @@ export async function replan(
       prefs.timezone,
       existingBlocks,
       result,
-      plannerCalendarId,
+      calendarRouting,
     );
 
     await db
@@ -324,6 +333,11 @@ async function loadSchedulableTasks(
     title: t.title,
     area: t.area,
     energy: t.energy,
+    location: t.location,
+    travelMinutes: t.travelMinutes,
+    preparationMinutes: t.preparationMinutes,
+    recoveryMinutes: t.recoveryMinutes,
+    flexibility: t.flexibility,
     priority: t.priority,
     plannedMinutes: t.plannedMinutes,
     dueAt: t.dueAt,
@@ -365,6 +379,27 @@ async function loadCompletedTaskEnds(
   return new Map(rows.map((r) => [r.id, r.completedAt ?? 0]));
 }
 
+async function loadCompletedGymAt(
+  db: DB,
+  userId: string,
+  now: number,
+): Promise<number[]> {
+  const rows = await db
+    .select({ completedAt: tasks.completedAt })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.userId, userId),
+        eq(tasks.status, 'done'),
+        eq(tasks.isGym, true),
+        gt(tasks.completedAt, now - 7 * DAY_MS),
+      ),
+    );
+  return rows
+    .map((row) => row.completedAt)
+    .filter((value): value is number => value !== null);
+}
+
 async function loadFutureBlocks(db: DB, userId: string, now: number) {
   return db
     .select()
@@ -378,7 +413,7 @@ function toPlacedBlock(b: typeof scheduledBlocks.$inferSelect): PlacedBlock {
     title: b.title,
     start: b.startAt,
     end: b.endAt,
-    kind: b.kind === 'gym' ? 'gym' : 'task',
+    kind: b.kind === 'gym' ? 'gym' : b.kind === 'buffer' ? 'buffer' : 'task',
     zone: 'morning',
     partIndex: b.partIndex,
     partCount: b.partCount,
@@ -400,7 +435,7 @@ function blockKey(
   timezone: string,
 ): string {
   if (block.taskId) return `task:${block.taskId}:${block.partIndex}`;
-  return `${block.kind}:${localDateKey(block.start, timezone)}`;
+  return `${block.kind}:${localDateKey(block.start, timezone)}:${block.partIndex}`;
 }
 
 function previewPlanDiff(
@@ -485,7 +520,7 @@ async function reconcileBlocks(
   timezone: string,
   existing: Array<typeof scheduledBlocks.$inferSelect>,
   result: ScheduleResult,
-  plannerCalendarId: string,
+  calendarRouting: Awaited<ReturnType<typeof getCalendarRoutingMap>>,
 ): Promise<PlanDiff> {
   const diff: PlanDiff = {
     created: 0,
@@ -513,6 +548,7 @@ async function reconcileBlocks(
   const seen = new Set<string>();
 
   for (const block of result.blocks) {
+    const targetCalendarId = calendarForBlock(block, calendarRouting);
     const key = blockKey(
       {
         taskId: block.taskId,
@@ -539,10 +575,11 @@ async function reconcileBlocks(
           partIndex: block.partIndex,
           partCount: block.partCount,
           syncState: 'pending',
+          calendarId: targetCalendarId,
         })
         .returning({ id: scheduledBlocks.id });
 
-      await enqueueCalendarUpsert(db, userId, inserted!.id, plannerCalendarId);
+      await enqueueCalendarUpsert(db, userId, inserted!.id, targetCalendarId);
       diff.created++;
       diff.changes.push(
         `Aggiunto: ${block.title} — ${formatRange(block.start, block.end, timezone)}`,
@@ -553,12 +590,26 @@ async function reconcileBlocks(
     // Pinned blocks are re-emitted unchanged; nothing to do.
     if (prior.pinned) continue;
 
+    const routeChanged =
+      (prior.calendarId ?? calendarRouting.fallback) !== targetCalendarId;
     const unchanged =
       prior.startAt === block.start &&
       prior.endAt === block.end &&
-      prior.title === block.title;
+      prior.title === block.title &&
+      !routeChanged;
 
     if (unchanged) continue;
+
+    if (routeChanged && prior.googleEventId) {
+      await db.insert(outbox).values({
+        userId,
+        kind: 'google_delete',
+        payload: {
+          eventId: prior.googleEventId,
+          calendarId: prior.calendarId ?? calendarRouting.fallback,
+        },
+      });
+    }
 
     await db
       .update(scheduledBlocks)
@@ -568,10 +619,12 @@ async function reconcileBlocks(
         endAt: block.end,
         partCount: block.partCount,
         syncState: 'pending',
+        calendarId: targetCalendarId,
+        ...(routeChanged ? { googleEventId: null } : {}),
       })
       .where(eq(scheduledBlocks.id, prior.id));
 
-    await enqueueCalendarUpsert(db, userId, prior.id, plannerCalendarId);
+    await enqueueCalendarUpsert(db, userId, prior.id, targetCalendarId);
     diff.moved++;
     diff.changes.push(
       `Spostato: ${block.title} → ${formatRange(block.start, block.end, timezone)}`,
@@ -596,7 +649,10 @@ async function reconcileBlocks(
       await db.insert(outbox).values({
         userId,
         kind: 'google_delete',
-        payload: { eventId: block.googleEventId, calendarId: plannerCalendarId },
+        payload: {
+          eventId: block.googleEventId,
+          calendarId: block.calendarId ?? calendarRouting.fallback,
+        },
       });
     }
     await db.delete(scheduledBlocks).where(eq(scheduledBlocks.id, block.id));
@@ -637,6 +693,22 @@ async function reconcileBlocks(
   }
 
   return diff;
+}
+
+function calendarForBlock(
+  block: PlacedBlock,
+  routing: Awaited<ReturnType<typeof getCalendarRoutingMap>>,
+): string {
+  if (
+    block.kind === 'gym' ||
+    // Buffer blocks are currently emitted only by the gym bundle; keep the
+    // shower/change component on the Gym calendar even though its title does
+    // not repeat the word "palestra".
+    block.kind === 'buffer'
+  ) {
+    return routing.byArea.gym ?? routing.byArea.health ?? routing.fallback;
+  }
+  return (block.area && routing.byArea[block.area]) || routing.fallback;
 }
 
 async function enqueueCalendarUpsert(
@@ -681,7 +753,12 @@ export async function moveBlock(
       .set({ startAt: newStart, endAt: newEnd, pinned: true, syncState: 'pending' })
       .where(eq(scheduledBlocks.id, blockId));
 
-    await enqueueCalendarUpsert(db, userId, blockId, plannerCalendarId);
+    await enqueueCalendarUpsert(
+      db,
+      userId,
+      blockId,
+      block.calendarId ?? plannerCalendarId,
+    );
     const diff = await replan(env, db, userId, 'task_moved', { confirmed: true });
     await db
       .update(scheduledBlocks)
@@ -725,7 +802,12 @@ export async function moveBlock(
       })
       .where(eq(scheduledBlocks.id, part.id));
 
-    await enqueueCalendarUpsert(db, userId, part.id, plannerCalendarId);
+    await enqueueCalendarUpsert(
+      db,
+      userId,
+      part.id,
+      part.calendarId ?? plannerCalendarId,
+    );
   }
 
   const earliest = Math.min(

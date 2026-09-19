@@ -76,6 +76,9 @@ settingsRoutes.patch('/', requireAuth('full'), async (c) => {
     .object({
       dayStartMinutes: z.number().int().min(0).max(1439).optional(),
       dayEndMinutes: z.number().int().min(0).max(1439).optional(),
+      sleepStartMinutes: z.number().int().min(0).max(1439).optional(),
+      sleepTargetMinutes: z.number().int().min(240).max(720).optional(),
+      wakeBufferMinutes: z.number().int().min(0).max(180).optional(),
       morningEndMinutes: z.number().int().min(0).max(1439).optional(),
       afternoonEndMinutes: z.number().int().min(0).max(1439).optional(),
       minBlockMinutes: z.number().int().min(5).max(240).optional(),
@@ -83,8 +86,14 @@ settingsRoutes.patch('/', requireAuth('full'), async (c) => {
       breakMinutes: z.number().int().min(0).max(120).optional(),
       bufferAroundEventsMinutes: z.number().int().min(0).max(120).optional(),
       gymSessionsPerWeek: z.number().int().min(0).max(7).optional(),
+      gymMaxSessionsPerWeek: z.number().int().min(0).max(7).optional(),
       gymDurationMinutes: z.number().int().min(15).max(240).optional(),
       gymPreferredDays: z.string().max(20).optional(),
+      gymAvoidDays: z.string().max(20).optional(),
+      gymTravelMinutes: z.number().int().min(0).max(180).optional(),
+      gymPreparationMinutes: z.number().int().min(0).max(180).optional(),
+      gymReturnMinutes: z.number().int().min(0).max(180).optional(),
+      gymMinRecoveryHours: z.number().int().min(0).max(168).optional(),
       briefingMinutes: z.number().int().min(0).max(1439).optional(),
       reviewMinutes: z.number().int().min(0).max(1439).optional(),
       reviewAfterShiftMinutes: z.number().int().min(0).max(240).optional(),
@@ -105,6 +114,15 @@ settingsRoutes.patch('/', requireAuth('full'), async (c) => {
   ) {
     throw new PlannerError('bad_request', {
       userMessage: 'La fine della giornata deve essere dopo l’inizio.',
+    });
+  }
+  if (
+    merged.gymSessionsPerWeek !== undefined &&
+    merged.gymMaxSessionsPerWeek !== undefined &&
+    merged.gymMaxSessionsPerWeek < merged.gymSessionsPerWeek
+  ) {
+    throw new PlannerError('bad_request', {
+      userMessage: 'Il massimo di allenamenti non può essere inferiore al minimo.',
     });
   }
 

@@ -161,6 +161,13 @@ export const settings = sqliteTable('settings', {
   dayStartMinutes: integer('day_start_minutes').notNull().default(7 * 60),
   dayEndMinutes: integer('day_end_minutes').notNull().default(22 * 60 + 30),
 
+  // Sleep is a hard feasibility constraint, not an aspirational calendar
+  // label. With the defaults (01:00 + 8h + 30m) automatic work begins at
+  // 09:30 unless a fixed morning commitment requires an earlier wake-up.
+  sleepStartMinutes: integer('sleep_start_minutes').notNull().default(60),
+  sleepTargetMinutes: integer('sleep_target_minutes').notNull().default(8 * 60),
+  wakeBufferMinutes: integer('wake_buffer_minutes').notNull().default(30),
+
   // Energy zone cutoffs. Demanding work lands before `morningEnd`, medium work
   // before `afternoonEnd`, light work and gym after it.
   morningEndMinutes: integer('morning_end_minutes').notNull().default(13 * 60),
@@ -179,8 +186,14 @@ export const settings = sqliteTable('settings', {
     .default(15),
 
   gymSessionsPerWeek: integer('gym_sessions_per_week').notNull().default(3),
+  gymMaxSessionsPerWeek: integer('gym_max_sessions_per_week').notNull().default(4),
   gymDurationMinutes: integer('gym_duration_minutes').notNull().default(75),
   gymPreferredDays: text('gym_preferred_days').notNull().default('1,3,5'),
+  gymAvoidDays: text('gym_avoid_days').notNull().default(''),
+  gymTravelMinutes: integer('gym_travel_minutes').notNull().default(25),
+  gymPreparationMinutes: integer('gym_preparation_minutes').notNull().default(20),
+  gymReturnMinutes: integer('gym_return_minutes').notNull().default(25),
+  gymMinRecoveryHours: integer('gym_min_recovery_hours').notNull().default(36),
 
   briefingMinutes: integer('briefing_minutes').notNull().default(7 * 60),
   reviewMinutes: integer('review_minutes').notNull().default(20 * 60 + 30),
@@ -330,7 +343,16 @@ export const tasks = sqliteTable(
     area: text('area').$type<Area>().notNull().default('general'),
 
     status: text('status', {
-      enum: ['inbox', 'todo', 'scheduled', 'in_progress', 'done', 'cancelled'],
+      enum: [
+        'inbox',
+        'todo',
+        'scheduled',
+        'in_progress',
+        'done',
+        'skipped',
+        'postponed',
+        'cancelled',
+      ],
     })
       .notNull()
       .default('todo'),
@@ -338,6 +360,16 @@ export const tasks = sqliteTable(
     // 1 = drop everything, 4 = whenever.
     priority: integer('priority').notNull().default(3),
     energy: text('energy').$type<Energy>().notNull().default('medium'),
+    /** Where the work happens; used to reserve travel before the block. */
+    location: text('location'),
+    travelMinutes: integer('travel_minutes').notNull().default(0),
+    preparationMinutes: integer('preparation_minutes').notNull().default(0),
+    recoveryMinutes: integer('recovery_minutes').notNull().default(0),
+    flexibility: text('flexibility', {
+      enum: ['fixed', 'low', 'medium', 'high'],
+    })
+      .notNull()
+      .default('high'),
 
     /** What Claude (or Giulia) thinks it takes. */
     estimatedMinutes: integer('estimated_minutes').notNull().default(30),
@@ -443,6 +475,8 @@ export const scheduledBlocks = sqliteTable(
     pinned: integer('pinned', { mode: 'boolean' }).notNull().default(false),
     /** Mirrored into Google Calendar; this is the event id there. */
     googleEventId: text('google_event_id'),
+    /** Actual output calendar, so updates/deletes use the routed destination. */
+    calendarId: text('calendar_id'),
     syncState: text('sync_state', {
       enum: ['pending', 'synced', 'failed', 'deleted'],
     })

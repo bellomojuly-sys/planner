@@ -131,6 +131,11 @@ export interface TaskView {
   actualMinutes: number | null;
   dueAt: number | null;
   pinned: boolean;
+  location: string | null;
+  travelMinutes: number;
+  preparationMinutes: number;
+  recoveryMinutes: number;
+  flexibility: 'fixed' | 'low' | 'medium' | 'high';
 }
 
 export interface ShoppingItemView {
