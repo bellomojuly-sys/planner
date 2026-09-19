@@ -885,10 +885,12 @@ function CaptureTokens() {
 
   return (
     <div className="card">
-      <h2>Dettatura · aggiungi attività</h2>
+      <h2>Dettatura · parla con Planner</h2>
       <p className="list__meta">
-        Genera un token per il Comando Rapido. Vale solo per registrare note vocali: non può
-        leggere il piano né cambiare le impostazioni.
+        Genera un token per il Comando Rapido. Con una frase aggiungi, completi o sposti
+        attività, e chiedi «cosa devo fare oggi?»: Planner ti risponde a voce se l’ultima
+        azione del comando è «Leggi testo». Il token legge solo il programma di oggi: non
+        vede il resto del piano né può cambiare le impostazioni.
       </p>
 
       {token && (

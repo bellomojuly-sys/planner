@@ -1,7 +1,8 @@
 # Tasto Azione iPhone — configurazione
 
-L'obiettivo: premere il tasto Azione, dire una frase in italiano, e trovare
-l'attività già pianificata al posto giusto.
+L'obiettivo: premere il tasto Azione, dire una frase in italiano, e sentire
+Planner rispondere a voce. La stessa frase può aggiungere, completare o spostare
+attività, e chiedere cosa resta da fare oggi.
 
 La dettatura avviene **sul telefono**, con il riconoscimento vocale di Apple.
 Al server arriva solo il testo: nessun file audio lascia mai l'iPhone, e non
@@ -14,9 +15,10 @@ serve alcun servizio di trascrizione a pagamento.
 Nell'app → **Impostazioni** → *Tasto Azione iPhone* → **Genera token**.
 
 Copialo subito: viene mostrato una sola volta (il server ne conserva solo
-l'hash). Il token vale **solo** per registrare note vocali — non può leggere il
-piano, modificare le impostazioni né vedere la lista della spesa. Se perdi il
-telefono, revocalo dalla stessa schermata e nient'altro è esposto.
+l'hash). Il token registra note vocali e legge **solo il programma di oggi**
+quando fai una domanda — non vede il resto del piano, non modifica le
+impostazioni e non vede la lista della spesa. Se perdi il telefono, revocalo
+dalla stessa schermata.
 
 ---
 
@@ -28,7 +30,11 @@ App **Comandi** → **+** → aggiungi queste azioni nell'ordine:
 |---|--------|--------------|
 | 1 | **Detta testo** | Lingua: Italiano · Interrompi ascolto: *Dopo una pausa* |
 | 2 | **Ottieni contenuto dell'URL** | vedi sotto |
-| 3 | **Mostra notifica** | Testo: il risultato dell'azione 2 |
+| 3 | **Leggi testo** | Testo: il risultato dell'azione 2 · Lingua: Italiano |
+
+L'azione 3 è ciò che fa parlare Planner: legge a voce cosa ha fatto e, se hai
+fatto una domanda, il programma di oggi. Se preferisci non sentire la
+risposta, usa **Mostra notifica** al suo posto.
 
 Configurazione dell'azione 2 (tocca ▸ per aprire i dettagli):
 
@@ -65,7 +71,8 @@ Il modello capisce più azioni in una sola frase e le applica in ordine.
 | «Prima di scrivere il report devo sentire Marco» | Crea la dipendenza fra le due attività |
 | «Finito il latte, comprane due» | Aggiunge il latte alla lista della spesa, quantità 2 |
 | «Preso il pane» | Segna il pane come comprato |
-| «Cosa devo fare adesso?» | La notifica risponde con i prossimi blocchi |
+| «Cosa devo fare oggi?» | Planner legge a voce gli impegni e le attività che restano oggi |
+| «Ho finito il report, cosa mi resta?» | Segna completato e poi legge il resto della giornata |
 
 Le stime di durata, energia, priorità e area sono automatiche. Vengono corrette
 nel tempo dai tempi reali che registri completando le attività.
