@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, type TaskView } from '../lib/api';
 import { AREA_LABELS, ENERGY_LABELS, dayShort, duration } from '../lib/format';
+import { withTaskStatus } from '../lib/optimistic';
 
 export function Tasks({ onChanged }: { onChanged: () => void }) {
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>('open');
   const [showForm, setShowForm] = useState(false);
+  const [pendingIds, setPendingIds] = useState<Set<string>>(() => new Set());
 
   async function load() {
     try {
@@ -73,12 +75,32 @@ export function Tasks({ onChanged }: { onChanged: () => void }) {
               className="check"
               aria-pressed={task.status === 'done'}
               aria-label="Segna come completata"
+              disabled={pendingIds.has(task.id)}
               onClick={async () => {
-                await api.patch(`/tasks/${task.id}`, {
-                  status: task.status === 'done' ? 'todo' : 'done',
-                });
-                await load();
-                onChanged();
+                const nextStatus = task.status === 'done' ? 'todo' : 'done';
+                setTasks((current) =>
+                  withTaskStatus(current, task.id, nextStatus),
+                );
+                setPendingIds((current) => new Set(current).add(task.id));
+                setError(null);
+                try {
+                  await api.patch(`/tasks/${task.id}`, { status: nextStatus });
+                  void load();
+                  onChanged();
+                } catch (err) {
+                  setError(
+                    err instanceof ApiError
+                      ? err.message
+                      : 'Non sono riuscita ad aggiornare l’attività.',
+                  );
+                  await load();
+                } finally {
+                  setPendingIds((current) => {
+                    const next = new Set(current);
+                    next.delete(task.id);
+                    return next;
+                  });
+                }
               }}
             >
               {task.status === 'done' ? '✓' : ''}

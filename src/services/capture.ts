@@ -11,11 +11,14 @@ import {
   type Task,
 } from '../db/schema';
 import { interpretUtterance, type Intent } from '../integrations/llm';
-import { applyLearning, recordCompletion } from '../scheduler/estimate';
+import { applyLearning } from '../scheduler/estimate';
 import { replan, type RescheduleTrigger } from './planner';
-import { getPlannerCalendarId } from './calendar-sources';
+import {
+  completeTaskLocally,
+  inferActualMinutes,
+} from './completion';
 import { seal } from '../crypto/encryption';
-import { DAY_MS, formatDayLong, localDateKey, minutesBetween } from '../lib/time';
+import { DAY_MS, formatDayLong, localDateKey } from '../lib/time';
 import { PlannerError, toPlannerError } from '../lib/errors';
 import type { Env } from '../env';
 
@@ -337,43 +340,10 @@ async function completeTask(
 
   // When Giulia does not say how long it took, infer it from the block that
   // was actually scheduled — still real data, just less precise.
-  const actual = intent.actualMinutes ?? (await inferActualMinutes(db, task.id));
+  const actual =
+    intent.actualMinutes ?? (await inferActualMinutes(db, userId, task.id));
 
-  await db
-    .update(tasks)
-    .set({ status: 'done', completedAt: Date.now(), dirty: true })
-    .where(eq(tasks.id, task.id));
-
-  if (actual) await recordCompletion(db, userId, task, actual);
-
-  // Free the calendar immediately rather than waiting for the next replan.
-  const blocks = await db
-    .select()
-    .from(scheduledBlocks)
-    .where(eq(scheduledBlocks.taskId, task.id));
-  const plannerCalendarId = await getPlannerCalendarId(db, userId);
-
-  for (const block of blocks) {
-    if (block.googleEventId) {
-      await db.insert(outbox).values({
-        userId,
-        kind: 'google_delete',
-        payload: {
-          eventId: block.googleEventId,
-          calendarId: block.calendarId ?? plannerCalendarId,
-        },
-      });
-    }
-  }
-  await db.delete(scheduledBlocks).where(eq(scheduledBlocks.taskId, task.id));
-
-  if (task.externalId && task.sourceId) {
-    await db.insert(outbox).values({
-      userId,
-      kind: 'notion_complete',
-      payload: { taskId: task.id },
-    });
-  }
+  await completeTaskLocally(db, userId, task, actual);
 
   return {
     message: actual
@@ -381,20 +351,6 @@ async function completeTask(
       : `Completata "${task.title}"`,
     trigger: 'dependency_cascade',
   };
-}
-
-async function inferActualMinutes(db: DB, taskId: string): Promise<number | null> {
-  const blocks = await db
-    .select()
-    .from(scheduledBlocks)
-    .where(eq(scheduledBlocks.taskId, taskId));
-
-  const now = Date.now();
-  const elapsed = blocks
-    .filter((b) => b.startAt < now)
-    .reduce((sum, b) => sum + minutesBetween(b.startAt, Math.min(b.endAt, now)), 0);
-
-  return elapsed > 0 ? elapsed : null;
 }
 
 async function moveTask(

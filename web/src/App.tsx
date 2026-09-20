@@ -14,6 +14,7 @@ import {
   sameDay,
   startOfDay,
 } from './lib/format';
+import { withoutTaskBlocks } from './lib/optimistic';
 
 type View = 'day' | 'tasks' | 'shopping' | 'settings';
 type AuthState = 'loading' | 'setup' | 'recover' | 'locked' | 'unlocked';
@@ -145,12 +146,21 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
     if (!block.taskId || block.kind !== 'task') return;
     if (!confirm(`Segnare "${block.title}" come completata?`)) return;
 
+    const taskId = block.taskId;
+    setPlan((current) =>
+      current
+        ? { ...current, blocks: withoutTaskBlocks(current.blocks, taskId) }
+        : current,
+    );
+    setError(null);
+    setNotice('Completata. Sincronizzo Notion e calendario in background…');
+
     try {
       await api.post(`/plan/blocks/${block.id}/complete`);
-      setNotice('Completata. Ho aggiornato la stima con il tempo reale.');
-      await loadPlan();
+      window.setTimeout(() => void loadPlan(), 1500);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Errore.');
+      await loadPlan();
     }
   }
 

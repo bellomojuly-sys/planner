@@ -13,7 +13,10 @@ import {
 } from '../db/schema';
 import { replan, moveBlock, unpinBlock } from '../services/planner';
 import { drainOutbox } from '../services/outbox';
-import { recordCompletion } from '../scheduler/estimate';
+import {
+  completeTaskLocally,
+  finishCompletionInBackground,
+} from '../services/completion';
 import { loadAgenda, renderVoiceAgenda } from '../jobs/daily';
 import { DAY_MS, startOfLocalDay, addLocalDays } from '../lib/time';
 import { PlannerError } from '../lib/errors';
@@ -276,23 +279,24 @@ planRoutes.post('/blocks/:id/complete', requireAuth('full'), async (c) => {
     });
   }
 
-  const task = await db.query.tasks.findFirst({ where: eq(tasks.id, block.taskId) });
+  const task = await db.query.tasks.findFirst({
+    where: and(eq(tasks.id, block.taskId), eq(tasks.userId, userId)),
+  });
   if (!task) throw new PlannerError('not_found');
 
   const actual =
     body.actualMinutes ?? Math.round((block.endAt - block.startAt) / 60_000);
 
-  await db
-    .update(tasks)
-    .set({ status: 'done', completedAt: Date.now(), dirty: true })
-    .where(eq(tasks.id, task.id));
+  await completeTaskLocally(db, userId, task, actual);
 
-  await recordCompletion(db, userId, task, actual);
+  c.executionCtx.waitUntil(
+    finishCompletionInBackground(c.env, db, userId),
+  );
 
-  const diff = await replan(c.env, db, userId, 'dependency_cascade');
-  await drainOutbox(c.env, db);
-
-  return c.json({ ok: true, actualMinutes: actual, diff });
+  return c.json(
+    { ok: true, actualMinutes: actual, taskId: task.id, syncing: true },
+    202,
+  );
 });
 
 /** Dependency graph, for the "why is this here?" panel. */

@@ -8,6 +8,11 @@ import { applyLearning } from '../scheduler/estimate';
 import { replan } from '../services/planner';
 import { drainOutbox } from '../services/outbox';
 import { PlannerError } from '../lib/errors';
+import {
+  completeTaskLocally,
+  finishCompletionInBackground,
+  inferActualMinutes,
+} from '../services/completion';
 
 export const taskRoutes = new Hono<AppBindings>();
 
@@ -115,6 +120,22 @@ taskRoutes.patch('/:id', requireAuth('full'), async (c) => {
     where: and(eq(tasks.id, id), eq(tasks.userId, userId)),
   });
   if (!existing) throw new PlannerError('not_found');
+
+  const isCompletionOnly =
+    body.status === 'done' &&
+    existing.status !== 'done' &&
+    Object.keys(body).every((key) => key === 'status');
+  if (isCompletionOnly) {
+    const actualMinutes = await inferActualMinutes(db, userId, existing.id);
+    await completeTaskLocally(db, userId, existing, actualMinutes);
+    c.executionCtx.waitUntil(
+      finishCompletionInBackground(c.env, db, userId),
+    );
+    return c.json(
+      { ok: true, taskId: existing.id, actualMinutes, syncing: true },
+      202,
+    );
+  }
 
   // Any change to the inputs of the estimate invalidates the planned duration.
   const shouldRecompute =
