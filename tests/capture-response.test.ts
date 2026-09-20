@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { renderCaptureOutcome } from '../src/routes/capture';
+import { spokenArea } from '../src/services/capture';
 
 describe('voice capture response', () => {
+  it('speaks the inferred area with an Italian label', () => {
+    expect(spokenArea('mg')).toBe('MG');
+    expect(spokenArea('university')).toBe('università');
+    expect(spokenArea('errand')).toBe('commissioni');
+  });
+
   it('confirms only an action that was actually applied', () => {
     expect(
       renderCaptureOutcome({

@@ -273,9 +273,24 @@ async function createTask(
   }
 
   return {
-    message: `Aggiunta "${created!.title}" (${learned.plannedMinutes} min)`,
+    message: `Aggiunta "${created!.title}", area ${spokenArea(area)} (${learned.plannedMinutes} min)`,
     trigger: intent.urgent || (intent.priority ?? 3) === 1 ? 'urgent_task' : 'capture',
   };
+}
+
+/** Human labels used in the short spoken confirmation returned to the Shortcut. */
+export function spokenArea(area: string): string {
+  const labels: Record<string, string> = {
+    general: 'generale',
+    mg: 'MG',
+    university: 'università',
+    heemia: 'Heemia',
+    career: 'carriera',
+    personal: 'personale',
+    health: 'salute',
+    errand: 'commissioni',
+  };
+  return labels[area] ?? area;
 }
 
 /**
