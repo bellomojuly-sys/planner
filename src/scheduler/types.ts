@@ -2,6 +2,25 @@ import type { Area, Energy, Settings } from '../db/schema';
 import type { Interval } from '../lib/time';
 
 export type Zone = 'morning' | 'afternoon' | 'evening';
+export type PlanningClass = 'constraint' | 'objective' | 'preference';
+export type ExecutionClass = 'you_do' | 'jarvis_does' | 'hybrid';
+export type DecisionOutcome =
+  | 'keep'
+  | 'move'
+  | 'postpone'
+  | 'delegation_candidate'
+  | 'needs_decision';
+
+export interface PlanDecision {
+  taskId: string;
+  title: string;
+  planningClass: PlanningClass;
+  executionClass: ExecutionClass;
+  outcome: DecisionOutcome;
+  reason: string;
+  /** Complete reservation: preparation + travel + activity + recovery. */
+  reservedMinutes: number;
+}
 
 /** A contiguous run of workable time, tagged with the energy zone it sits in. */
 export interface Slot extends Interval {
@@ -116,6 +135,10 @@ export const DEFAULT_LOAD: DailyLoad = {
 export interface ScheduleResult {
   blocks: PlacedBlock[];
   unplaced: UnplacedTask[];
+  decisions: PlanDecision[];
+  /** Deterministic five-line explanation generated from `decisions`. */
+  briefing: string[];
+  fixedCommitments: number;
   /** Per-task end instants, so dependents can be anchored. */
   taskEnd: Map<string, number>;
   warnings: string[];

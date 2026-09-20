@@ -24,6 +24,9 @@ function result(start: number, unplaced: ScheduleResult['unplaced'] = []): Sched
       },
     ],
     unplaced,
+    decisions: [],
+    briefing: [],
+    fixedCommitments: 0,
     taskEnd: new Map(),
     warnings: [],
   };

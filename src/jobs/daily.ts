@@ -1,4 +1,4 @@
-import { and, eq, gte, lt, lte, ne } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, lte, ne } from 'drizzle-orm';
 import type { DB } from '../db/client';
 import {
   scheduledBlocks,
@@ -6,6 +6,7 @@ import {
   tasks,
   shoppingItems,
   settings as settingsTable,
+  scheduleRuns,
 } from '../db/schema';
 import { composeBriefing } from '../integrations/llm';
 import { estimateAccuracy } from '../scheduler/estimate';
@@ -194,24 +195,18 @@ export async function runMorningBriefing(
   timezone: string,
 ): Promise<string> {
   const agenda = await loadAgenda(db, userId, timezone, Date.now());
+  const [latestRun] = await db
+    .select({ summary: scheduleRuns.summary })
+    .from(scheduleRuns)
+    .where(eq(scheduleRuns.userId, userId))
+    .orderBy(desc(scheduleRuns.startedAt))
+    .limit(1);
 
-  const prompt = `Prepara il briefing del mattino per ${agenda.dayLabel}.
-
-PROGRAMMA DI OGGI
-${renderAgenda(agenda, timezone)}
-
-${agenda.overdue.length > 0 ? `IN RITARDO\n${agenda.overdue.map((t) => `- ${t.title}`).join('\n')}\n` : ''}${agenda.shoppingOpen > 0 ? `Lista della spesa: ${agenda.shoppingOpen} articoli aperti.\n` : ''}
-Scrivi il briefing: cosa conta davvero oggi, dove sono i momenti stretti, cosa può slittare senza danni. Non ripetere l'elenco orario, Giulia ce l'ha già davanti.`;
-
-  // If the model is unreachable the plan is still correct, so fall back to the
-  // plain agenda rather than skipping the briefing entirely.
-  let text: string;
-  try {
-    text = await composeBriefing(env, prompt);
-  } catch (err) {
-    console.error('[briefing] compose failed, using plain agenda', err);
-    text = renderAgenda(agenda, timezone);
-  }
+  // The morning explanation is deterministic and traceable to the structured
+  // decision result. The model may not invent what was kept or sacrificed.
+  const text =
+    renderDecisionBriefing(latestRun?.summary) ??
+    `Piano di ${agenda.dayLabel}:\n${renderAgenda(agenda, timezone)}`;
 
   const firstBlock = agenda.blocks[0];
   await sendToUser(env, db, userId, {
@@ -224,6 +219,20 @@ Scrivi il briefing: cosa conta davvero oggi, dove sono i momenti stretti, cosa p
   });
 
   return text;
+}
+
+export function renderDecisionBriefing(summary: unknown): string | null {
+  if (!summary || typeof summary !== 'object') return null;
+  const briefing = (summary as { briefing?: unknown }).briefing;
+  if (
+    !Array.isArray(briefing) ||
+    briefing.length === 0 ||
+    briefing.length > 5 ||
+    !briefing.every((line) => typeof line === 'string' && line.trim().length > 0)
+  ) {
+    return null;
+  }
+  return briefing.join('\n');
 }
 
 // ---------------------------------------------------------------------------

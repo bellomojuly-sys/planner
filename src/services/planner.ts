@@ -14,10 +14,16 @@ import {
 } from '../db/schema';
 import { schedule } from '../scheduler/engine';
 import type {
+  PlanDecision,
   PlacedBlock,
   SchedulableTask,
   ScheduleResult,
 } from '../scheduler/types';
+import { buildDecisionBriefing, markMoved } from '../scheduler/decisions';
+import {
+  applyBusyPersonalRules,
+  applyTaskPersonalRules,
+} from '../scheduler/personal-rules';
 import type { DepMap } from '../scheduler/dependencies';
 import { loadBusyIntervals, inferPhaseDependencies } from './sync';
 import { getCalendarRoutingMap, getPlannerCalendarId } from './calendar-sources';
@@ -43,7 +49,9 @@ export interface PlanDiff {
   created: number;
   moved: number;
   removed: number;
-  unplaced: Array<{ title: string; reason: string }>;
+  unplaced: Array<{ title: string; reason: string; outcome: string }>;
+  decisions: PlanDecision[];
+  briefing: string[];
   warnings: string[];
   /** Italian one-liners describing what changed, for the UI and notifications. */
   changes: string[];
@@ -102,6 +110,10 @@ export async function replan(
         moved: 0,
         removed: 0,
         unplaced: [],
+        decisions: [],
+        briefing: [
+          'Piano invariato: una fonte necessaria non è sincronizzata.',
+        ],
         warnings: [
           'Il piano non è stato aggiornato perché Notion o Google Calendar non sono sincronizzati.',
           ...dataIssues,
@@ -143,9 +155,11 @@ export async function replan(
       calendarRouting,
       completedGymAt,
     ] = await Promise.all([
-      loadSchedulableTasks(db, userId),
+      loadSchedulableTasks(db, userId, prefs.settings),
       loadDependencies(db, userId),
-      loadBusyIntervals(db, userId, now, horizonEnd),
+      loadBusyIntervals(db, userId, now, horizonEnd).then((rows) =>
+        rows.map((row) => applyBusyPersonalRules(row, prefs.settings)),
+      ),
       loadFutureBlocks(db, userId, now),
       getCalendarRoutingMap(db, userId),
       loadCompletedGymAt(db, userId, Date.now()),
@@ -172,8 +186,9 @@ export async function replan(
       completedGymAt,
     });
 
-    const preview = previewPlanDiff(existingBlocks, result, prefs.timezone);
-    const reasons = confirmationReasons(existingBlocks, result, now, prefs.timezone);
+    const evaluated = withMoveDecisions(result, existingBlocks, prefs.timezone);
+    const preview = previewPlanDiff(existingBlocks, evaluated, prefs.timezone);
+    const reasons = confirmationReasons(existingBlocks, evaluated, now, prefs.timezone);
 
     if (reasons.length > 0 && !options.confirmed) {
       const diff: PlanDiff = {
@@ -209,7 +224,7 @@ export async function replan(
       userId,
       prefs.timezone,
       existingBlocks,
-      result,
+      evaluated,
       calendarRouting,
     );
 
@@ -316,6 +331,7 @@ async function loadPlanningDataIssues(
 async function loadSchedulableTasks(
   db: DB,
   userId: string,
+  settings: Settings,
 ): Promise<SchedulableTask[]> {
   const rows = await db
     .select()
@@ -328,28 +344,33 @@ async function loadSchedulableTasks(
       ),
     );
 
-  return rows.map((t) => ({
-    id: t.id,
-    title: t.title,
-    area: t.area,
-    energy: t.energy,
-    location: t.location,
-    travelMinutes: t.travelMinutes,
-    preparationMinutes: t.preparationMinutes,
-    recoveryMinutes: t.recoveryMinutes,
-    flexibility: t.flexibility,
-    priority: t.priority,
-    plannedMinutes: t.plannedMinutes,
-    dueAt: t.dueAt,
-    earliestStartAt: t.earliestStartAt,
-    splittable: t.splittable,
-    pinned: t.pinned,
-    isGym: t.isGym,
-    status: t.status,
-    projectKey: t.projectKey,
-    phaseOrder: t.phaseOrder,
-    horizon: t.horizon,
-  }));
+  return rows.map((t) =>
+    applyTaskPersonalRules(
+      {
+        id: t.id,
+        title: t.title,
+        area: t.area,
+        energy: t.energy,
+        location: t.location,
+        travelMinutes: t.travelMinutes,
+        preparationMinutes: t.preparationMinutes,
+        recoveryMinutes: t.recoveryMinutes,
+        flexibility: t.flexibility,
+        priority: t.priority,
+        plannedMinutes: t.plannedMinutes,
+        dueAt: t.dueAt,
+        earliestStartAt: t.earliestStartAt,
+        splittable: t.splittable,
+        pinned: t.pinned,
+        isGym: t.isGym,
+        status: t.status,
+        projectKey: t.projectKey,
+        phaseOrder: t.phaseOrder,
+        horizon: t.horizon,
+      },
+      settings,
+    ),
+  );
 }
 
 async function loadDependencies(db: DB, userId: string): Promise<DepMap> {
@@ -434,8 +455,58 @@ function blockKey(
   block: { taskId: string | null; partIndex: number; kind: string; start: number },
   timezone: string,
 ): string {
-  if (block.taskId) return `task:${block.taskId}:${block.partIndex}`;
+  if (block.taskId && block.kind === 'task') {
+    return `task:${block.taskId}:${block.partIndex}`;
+  }
+  if (block.taskId) {
+    return `task:${block.taskId}:${block.kind}:${block.partIndex}`;
+  }
   return `${block.kind}:${localDateKey(block.start, timezone)}:${block.partIndex}`;
+}
+
+function withMoveDecisions(
+  result: ScheduleResult,
+  existing: Array<typeof scheduledBlocks.$inferSelect>,
+  timezone: string,
+): ScheduleResult {
+  const existingByKey = new Map(
+    existing.map((block) => [
+      blockKey(
+        {
+          taskId: block.taskId,
+          partIndex: block.partIndex,
+          kind: block.kind,
+          start: block.startAt,
+        },
+        timezone,
+      ),
+      block,
+    ]),
+  );
+  const movedTaskIds = new Set<string>();
+  for (const block of result.blocks) {
+    if (!block.taskId || block.kind !== 'task') continue;
+    const prior = existingByKey.get(blockKey(block, timezone));
+    if (
+      prior &&
+      !prior.pinned &&
+      (prior.startAt !== block.start ||
+        prior.endAt !== block.end ||
+        prior.title !== block.title)
+    ) {
+      movedTaskIds.add(block.taskId);
+    }
+  }
+
+  const decisions = markMoved(result.decisions, movedTaskIds);
+  return {
+    ...result,
+    decisions,
+    briefing: buildDecisionBriefing({
+      decisions,
+      fixedCommitments: result.fixedCommitments,
+    }),
+  };
 }
 
 function previewPlanDiff(
@@ -446,6 +517,9 @@ function previewPlanDiff(
   PlanDiff,
   'applied' | 'requiresConfirmation' | 'confirmationReasons' | 'blockedByStaleData'
 > {
+  const decisionById = new Map(
+    result.decisions.map((decision) => [decision.taskId, decision]),
+  );
   const diff = {
     created: 0,
     moved: 0,
@@ -453,7 +527,10 @@ function previewPlanDiff(
     unplaced: result.unplaced.map((item) => ({
       title: item.title,
       reason: item.reason,
+      outcome: decisionById.get(item.taskId)?.outcome ?? 'postpone',
     })),
+    decisions: result.decisions,
+    briefing: result.briefing,
     warnings: [...result.warnings],
     changes: [] as string[],
   };
@@ -522,11 +599,20 @@ async function reconcileBlocks(
   result: ScheduleResult,
   calendarRouting: Awaited<ReturnType<typeof getCalendarRoutingMap>>,
 ): Promise<PlanDiff> {
+  const decisionById = new Map(
+    result.decisions.map((decision) => [decision.taskId, decision]),
+  );
   const diff: PlanDiff = {
     created: 0,
     moved: 0,
     removed: 0,
-    unplaced: result.unplaced.map((u) => ({ title: u.title, reason: u.reason })),
+    unplaced: result.unplaced.map((u) => ({
+      title: u.title,
+      reason: u.reason,
+      outcome: decisionById.get(u.taskId)?.outcome ?? 'postpone',
+    })),
+    decisions: result.decisions,
+    briefing: result.briefing,
     warnings: result.warnings,
     changes: [],
     applied: true,
@@ -699,13 +785,10 @@ function calendarForBlock(
   block: PlacedBlock,
   routing: Awaited<ReturnType<typeof getCalendarRoutingMap>>,
 ): string {
-  if (
-    block.kind === 'gym' ||
-    // Buffer blocks are currently emitted only by the gym bundle; keep the
-    // shower/change component on the Gym calendar even though its title does
-    // not repeat the word "palestra".
-    block.kind === 'buffer'
-  ) {
+  if (block.kind === 'buffer' && block.area) {
+    return routing.byArea[block.area] || routing.fallback;
+  }
+  if (block.kind === 'gym' || block.kind === 'buffer') {
     return routing.byArea.gym ?? routing.byArea.health ?? routing.fallback;
   }
   return (block.area && routing.byArea[block.area]) || routing.fallback;

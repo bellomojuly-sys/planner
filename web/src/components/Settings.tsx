@@ -13,6 +13,11 @@ const NUMERIC_FIELDS: Array<{ key: string; label: string; hint?: string }> = [
   { key: 'maxBlockMinutes', label: 'Blocco massimo (min)' },
   { key: 'breakMinutes', label: 'Pausa fra blocchi (min)' },
   { key: 'bufferAroundEventsMinutes', label: 'Margine attorno agli impegni fissi (min)' },
+  { key: 'universityTravelMinutes', label: 'Casa → università (min)' },
+  { key: 'universityPreparationMinutes', label: 'Preparazione università senza doccia (min)' },
+  { key: 'universityShowerPreparationMinutes', label: 'Preparazione università con doccia (min)' },
+  { key: 'restaurantTravelMinutes', label: 'Casa → ristorante (min)' },
+  { key: 'restaurantReturnMinutes', label: 'Ristorante → casa (min)' },
   { key: 'gymSessionsPerWeek', label: 'Palestra a settimana' },
   { key: 'gymMaxSessionsPerWeek', label: 'Massimo palestra a settimana' },
   { key: 'gymDurationMinutes', label: 'Durata palestra (min)' },
@@ -260,6 +265,17 @@ export function Settings({ onChanged }: { onChanged: () => void }) {
             </label>
           );
         })}
+
+        <label className="field">
+          <span>Doccia prima dell’università come impostazione predefinita</span>
+          <input
+            type="checkbox"
+            checked={Boolean(draft.universityShowerDefault)}
+            onChange={(e) =>
+              setDraft({ ...draft, universityShowerDefault: e.target.checked })
+            }
+          />
+        </label>
 
         <label className="field">
           <span>Giorni palestra (1 = lunedì … 7 = domenica)</span>

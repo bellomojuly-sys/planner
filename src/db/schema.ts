@@ -185,6 +185,25 @@ export const settings = sqliteTable('settings', {
     .notNull()
     .default(15),
 
+  // Persistent Personal Rules. These are derived constraints, never manual
+  // placeholder tasks. A task-level value always wins over the default.
+  universityTravelMinutes: integer('university_travel_minutes').notNull().default(15),
+  universityPreparationMinutes: integer('university_preparation_minutes')
+    .notNull()
+    .default(60),
+  universityShowerPreparationMinutes: integer(
+    'university_shower_preparation_minutes',
+  )
+    .notNull()
+    .default(105),
+  universityShowerDefault: integer('university_shower_default', {
+    mode: 'boolean',
+  })
+    .notNull()
+    .default(false),
+  restaurantTravelMinutes: integer('restaurant_travel_minutes').notNull().default(20),
+  restaurantReturnMinutes: integer('restaurant_return_minutes').notNull().default(20),
+
   gymSessionsPerWeek: integer('gym_sessions_per_week').notNull().default(3),
   gymMaxSessionsPerWeek: integer('gym_max_sessions_per_week').notNull().default(4),
   gymDurationMinutes: integer('gym_duration_minutes').notNull().default(75),

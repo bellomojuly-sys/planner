@@ -270,6 +270,12 @@ planRoutes.post('/blocks/:id/complete', requireAuth('full'), async (c) => {
     return c.json({ ok: true });
   }
 
+  if (block.kind !== 'task') {
+    throw new PlannerError('bad_request', {
+      userMessage: 'Questo intervallo è un buffer derivato e non può essere completato da solo.',
+    });
+  }
+
   const task = await db.query.tasks.findFirst({ where: eq(tasks.id, block.taskId) });
   if (!task) throw new PlannerError('not_found');
 

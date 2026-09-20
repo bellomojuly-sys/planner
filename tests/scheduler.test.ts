@@ -36,6 +36,12 @@ const settings: Settings = {
   maxBlockMinutes: 90,
   breakMinutes: 10,
   bufferAroundEventsMinutes: 15,
+  universityTravelMinutes: 15,
+  universityPreparationMinutes: 60,
+  universityShowerPreparationMinutes: 105,
+  universityShowerDefault: false,
+  restaurantTravelMinutes: 20,
+  restaurantReturnMinutes: 20,
   gymSessionsPerWeek: 0,
   gymMaxSessionsPerWeek: 4,
   gymDurationMinutes: 75,
@@ -409,8 +415,12 @@ describe('splitting and capacity', () => {
       }),
       task({ id: 'next', energy: 'high', plannedMinutes: 60 }),
     ]);
-    const first = result.blocks.find((b) => b.taskId === 'appointment-work')!;
-    const next = result.blocks.find((b) => b.taskId === 'next')!;
+    const first = result.blocks.find(
+      (b) => b.taskId === 'appointment-work' && b.kind === 'task',
+    )!;
+    const next = result.blocks.find(
+      (b) => b.taskId === 'next' && b.kind === 'task',
+    )!;
 
     expect(localMinutes(first.start, TZ)).toBeGreaterThanOrEqual(10 * 60);
     expect(next.start - first.end).toBeGreaterThanOrEqual(30 * 60_000);

@@ -743,6 +743,7 @@ export async function loadBusyIntervals(
   Array<{
     start: number;
     end: number;
+    title: string;
     isShift: boolean;
     location: string | null;
   }>
@@ -763,6 +764,7 @@ export async function loadBusyIntervals(
     .map((e) => ({
       start: e.startAt,
       end: e.endAt,
+      title: e.title,
       isShift: e.isShift,
       location: e.location,
     }));

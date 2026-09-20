@@ -43,6 +43,13 @@
       "when": 1789828250657,
       "tag": "0005_uneven_jubilee",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1789868127861,
+      "tag": "0006_flaky_energizer",
+      "breakpoints": true
     }
   ]
 }

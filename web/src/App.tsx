@@ -142,7 +142,7 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
   }
 
   async function selectBlock(block: Block) {
-    if (!block.taskId) return;
+    if (!block.taskId || block.kind !== 'task') return;
     if (!confirm(`Segnare "${block.title}" come completata?`)) return;
 
     try {
@@ -180,6 +180,7 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
         : sameDay(event.start, day),
     ) ?? [];
   const unplaced = plan?.lastRun?.summary?.unplaced ?? [];
+  const decisionBriefing = plan?.lastRun?.summary?.briefing ?? [];
   const pendingConfirmation =
     plan?.lastRun?.status === 'pending_confirmation'
       ? plan.lastRun.summary
@@ -264,14 +265,27 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
 
         {view === 'day' && (
           <>
+            {decisionBriefing.length > 0 && (
+              <div className="card">
+                <h2>Decisione del piano</h2>
+                <ol className="list__meta">
+                  {decisionBriefing.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
             {unplaced.length > 0 && (
               <div className="banner" data-tone="warn">
-                {unplaced.some((item) => item.reason === 'pinned_conflict')
-                  ? 'Serve una scelta per '
-                  : 'Non c’è spazio per '}
-                {unplaced.length}{' '}
-                {unplaced.length === 1 ? 'attività' : 'attività'}:{' '}
-                {unplaced.map((u) => u.title).join(', ')}.
+                {unplaced.map((item) => {
+                  const label =
+                    item.outcome === 'needs_decision'
+                      ? 'Serve una scelta'
+                      : item.outcome === 'delegation_candidate'
+                        ? 'Candidata per Jarvis'
+                        : 'Rinviata';
+                  return `${label}: ${item.title}`;
+                }).join(' · ')}
               </div>
             )}
             <DayCalendar

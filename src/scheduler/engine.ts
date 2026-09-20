@@ -18,6 +18,7 @@ import {
   type UnplacedTask,
   type Zone,
 } from './types';
+import { buildDecisionBriefing, buildPlanDecisions } from './decisions';
 
 const DAY_MS = 86_400_000;
 
@@ -261,7 +262,25 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   }
 
   blocks.sort((a, b) => a.start - b.start);
-  return { blocks, unplaced, taskEnd, warnings };
+  const decisions = buildPlanDecisions({
+    tasks: input.tasks,
+    blocks,
+    unplaced,
+    now,
+  });
+  const briefing = buildDecisionBriefing({
+    decisions,
+    fixedCommitments: input.busy.length,
+  });
+  return {
+    blocks,
+    unplaced,
+    decisions,
+    briefing,
+    fixedCommitments: input.busy.length,
+    taskEnd,
+    warnings,
+  };
 }
 
 function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
@@ -411,7 +430,7 @@ function tryPlaceParts(params: {
   // task and no consumed slots behind.
   const scratch = new SlotPool([...pool.list()]);
   const scratchBudget = params.budget.clone();
-  const out: PlacedBlock[] = [];
+  const taskBlocks: PlacedBlock[] = [];
   let cursor = params.earliest;
 
   for (let part = 0; part < partCount; part++) {
@@ -437,7 +456,7 @@ function tryPlaceParts(params: {
     const taskStart = found.start + beforeMs;
     const end = taskStart + partMs;
 
-    out.push({
+    taskBlocks.push({
       taskId: task.id,
       title:
         partCount > 1 ? `${task.title} (${part + 1}/${partCount})` : task.title,
@@ -455,7 +474,7 @@ function tryPlaceParts(params: {
   }
 
   // Commit: replay the same consumption against the real pool and budget.
-  for (const block of out) {
+  for (const block of taskBlocks) {
     const beforeMs =
       block.partIndex === 0
         ? ((task.travelMinutes ?? 0) + (task.preparationMinutes ?? 0)) * MINUTE_MS
@@ -477,6 +496,44 @@ function tryPlaceParts(params: {
       pool.consume(slot, reservationStart, reservationDuration, breakMs);
       params.budget.add(slot.dayKey, task.area, task.id, block.end - block.start);
     }
+  }
+
+  const out: PlacedBlock[] = [];
+  const beforeMinutes =
+    (task.travelMinutes ?? 0) + (task.preparationMinutes ?? 0);
+  const first = taskBlocks[0];
+  if (first && beforeMinutes > 0) {
+    out.push({
+      taskId: task.id,
+      title: `Preparazione e viaggio — ${task.title}`,
+      start: first.start - beforeMinutes * MINUTE_MS,
+      end: first.start,
+      kind: 'buffer',
+      zone: first.zone,
+      partIndex: -1,
+      partCount,
+      zoneCompromised: first.zoneCompromised,
+      area: task.area,
+    });
+  }
+
+  out.push(...taskBlocks);
+
+  const recoveryMinutes = task.recoveryMinutes ?? 0;
+  const last = taskBlocks[taskBlocks.length - 1];
+  if (last && recoveryMinutes > 0) {
+    out.push({
+      taskId: task.id,
+      title: `Rientro e recupero — ${task.title}`,
+      start: last.end,
+      end: last.end + recoveryMinutes * MINUTE_MS,
+      kind: 'buffer',
+      zone: last.zone,
+      partIndex: partCount,
+      partCount,
+      zoneCompromised: last.zoneCompromised,
+      area: task.area,
+    });
   }
 
   return out;

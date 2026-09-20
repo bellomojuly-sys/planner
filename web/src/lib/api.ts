@@ -108,7 +108,22 @@ export interface PlanResponse {
     at: number;
     summary: {
       changes?: string[];
-      unplaced?: Array<{ title: string; reason: string }>;
+      unplaced?: Array<{ title: string; reason: string; outcome: string }>;
+      briefing?: string[];
+      decisions?: Array<{
+        taskId: string;
+        title: string;
+        planningClass: 'constraint' | 'objective' | 'preference';
+        executionClass: 'you_do' | 'jarvis_does' | 'hybrid';
+        outcome:
+          | 'keep'
+          | 'move'
+          | 'postpone'
+          | 'delegation_candidate'
+          | 'needs_decision';
+        reason: string;
+        reservedMinutes: number;
+      }>;
       warnings?: string[];
       applied?: boolean;
       requiresConfirmation?: boolean;
