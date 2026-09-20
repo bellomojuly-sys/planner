@@ -28,4 +28,31 @@ describe('Voice intent contract', () => {
 
     expect(parsed.success).toBe(false);
   });
+
+  it('keeps the requested day on an agenda question', () => {
+    const parsed = validateInterpretation({
+      summary: 'Ti mostro il piano di lunedì.',
+      intents: [
+        {
+          kind: 'question',
+          question: 'Cosa devo fare lunedì?',
+          date: '2026-09-21',
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.intents[0]).toMatchObject({ date: '2026-09-21' });
+    }
+  });
+
+  it('rejects an agenda question that lost its requested day', () => {
+    const parsed = validateInterpretation({
+      summary: 'Ti mostro il piano.',
+      intents: [{ kind: 'question', question: 'Cosa devo fare lunedì?' }],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
 });

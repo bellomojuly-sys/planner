@@ -96,4 +96,28 @@ describe('Siri daily agenda', () => {
       'Per oggi non hai più nulla in programma.',
     );
   });
+
+  it('speaks the complete requested future day instead of today', () => {
+    const result = renderVoiceAgenda(
+      agenda({
+        dateKey: '2026-08-13',
+        dayLabel: 'giovedì 13 agosto',
+        blocks: [
+          {
+            title: 'Preparare il progetto',
+            start: Date.parse('2026-08-13T07:00:00Z'),
+            end: Date.parse('2026-08-13T08:00:00Z'),
+            kind: 'task',
+            taskId: 'project',
+          },
+        ],
+      }),
+      TZ,
+      NOW,
+    );
+
+    expect(result).toBe(
+      'Piano di giovedì 13 agosto: alle 09:00, Preparare il progetto.',
+    );
+  });
 });

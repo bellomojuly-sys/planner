@@ -82,6 +82,8 @@ const IntentSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('question'),
     question: z.string(),
+    /** Requested agenda day, resolved from "oggi", "domani" or a weekday. */
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   }),
   z.object({
     kind: z.literal('unclear'),
@@ -180,6 +182,11 @@ const JSON_SCHEMA = {
           store: { type: 'string' },
           itemQuery: { type: 'string' },
           question: { type: 'string' },
+          date: {
+            type: 'string',
+            description:
+              'Per una domanda sul piano, data richiesta in formato YYYY-MM-DD. Se non è specificata, usa oggi.',
+          },
           reason: { type: 'string' },
         },
       },
@@ -210,7 +217,7 @@ COME INTERPRETARE
 - "compra X", "finito il latte", "serve X" → add_shopping_item.
 - "preso il pane", "comprato X" → complete_shopping_item.
 - Tutto il resto che descrive qualcosa da fare → create_task.
-- Se la frase è una domanda sul piano ("cosa devo fare oggi?") → question.
+- Se la frase è una domanda sul piano ("cosa devo fare oggi?", "cosa devo fare lunedì?") → question. Compila sempre date con il giorno richiesto in formato YYYY-MM-DD; se non viene detto un giorno, usa oggi.
 - Se davvero non è chiaro cosa intende, usa unclear e spiega perché in italiano.
 
 STIME

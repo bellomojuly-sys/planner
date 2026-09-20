@@ -25,6 +25,8 @@ export interface CaptureResult {
   applied: string[];
   skipped: string[];
   answer?: string;
+  /** ISO local date requested by an agenda question. */
+  answerDate?: string;
   replanned: boolean;
 }
 
@@ -94,6 +96,7 @@ export async function handleCapture(
     const applied: string[] = [];
     const skipped: string[] = [];
     let answer: string | undefined;
+    let answerDate: string | undefined;
     let trigger: RescheduleTrigger | null = null;
 
     for (const intent of interpretation.intents) {
@@ -101,6 +104,7 @@ export async function handleCapture(
         const outcome = await applyIntent(env, db, userId, intent, timezone);
         if (outcome.message) applied.push(outcome.message);
         if (outcome.answer) answer = outcome.answer;
+        if (outcome.answerDate) answerDate = outcome.answerDate;
         if (outcome.trigger) {
           // An urgent addition outranks a routine one when several intents
           // arrive in the same breath.
@@ -127,7 +131,7 @@ export async function handleCapture(
       })
       .where(eq(captures.id, captureId));
 
-    return { captureId, summary, applied, skipped, answer, replanned };
+    return { captureId, summary, applied, skipped, answer, answerDate, replanned };
   } catch (err) {
     const pe = toPlannerError(err);
     await db
@@ -166,6 +170,7 @@ async function buildContext(db: DB, userId: string, timezone: string) {
 interface IntentOutcome {
   message?: string;
   answer?: string;
+  answerDate?: string;
   trigger?: RescheduleTrigger;
 }
 
@@ -192,7 +197,7 @@ async function applyIntent(
     case 'complete_shopping_item':
       return completeShoppingItem(db, userId, intent);
     case 'question':
-      return { answer: intent.question };
+      return { answer: intent.question, answerDate: intent.date };
     case 'unclear':
       throw new PlannerError('bad_request', {
         userMessage: `Non ho capito: ${intent.reason}`,

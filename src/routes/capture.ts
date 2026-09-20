@@ -5,7 +5,6 @@ import { requireAuth } from '../auth/middleware';
 import { handleCapture, type CaptureResult } from '../services/capture';
 import { drainOutbox } from '../services/outbox';
 import { loadAgenda, renderVoiceAgenda } from '../jobs/daily';
-import { formatRange } from '../lib/time';
 
 export const captureRoutes = new Hono<AppBindings>();
 
@@ -24,6 +23,13 @@ export function renderCaptureOutcome(
   if (applied) return applied;
   if (skipped) return `Non ho salvato la richiesta: ${skipped}`;
   return result.summary;
+}
+
+/** Noon UTC is safely inside the requested Europe/Rome calendar date. */
+export function agendaAnchor(requestedDate: string | undefined, now = Date.now()): number {
+  if (!requestedDate) return now;
+  const anchor = Date.parse(`${requestedDate}T12:00:00Z`);
+  return Number.isFinite(anchor) ? anchor : now;
 }
 
 /**
@@ -53,14 +59,9 @@ captureRoutes.post('/', requireAuth('capture'), async (c) => {
       c.get('db'),
       c.get('auth').userId,
       c.env.APP_TIMEZONE,
-      Date.now(),
+      agendaAnchor(result.answerDate),
     );
-    const next = agenda.blocks.filter((b) => b.end > Date.now()).slice(0, 3);
-    const agendaSpeech = next.length
-      ? `Prossime cose: ${next
-          .map((b) => `${b.title} alle ${formatRange(b.start, b.end, c.env.APP_TIMEZONE)}`)
-          .join('; ')}`
-      : 'Non hai altro in programma oggi.';
+    const agendaSpeech = renderVoiceAgenda(agenda, c.env.APP_TIMEZONE);
     const changed = result.applied.length > 0 || result.skipped.length > 0;
     spoken = changed ? `${renderCaptureOutcome(result)}. ${agendaSpeech}` : agendaSpeech;
   }
@@ -94,7 +95,7 @@ captureRoutes.post('/text', requireAuth('capture'), async (c) => {
 
   c.executionCtx.waitUntil(drainOutbox(c.env, c.get('db')));
 
-  // A question ("cosa devo fare oggi?") gets today's remaining agenda, so the
+  // A question gets the requested day's agenda, so the
   // same dictation shortcut both changes the plan and reads it back. Anything
   // it also changed in the same sentence is said first.
   if (result.answer) {
@@ -102,7 +103,7 @@ captureRoutes.post('/text', requireAuth('capture'), async (c) => {
       c.get('db'),
       c.get('auth').userId,
       c.env.APP_TIMEZONE,
-      Date.now(),
+      agendaAnchor(result.answerDate),
     );
     const changed = result.applied.length > 0 || result.skipped.length > 0;
     const outcome = changed ? `${renderCaptureOutcome(result)}. ` : '';

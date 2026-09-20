@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { renderCaptureOutcome } from '../src/routes/capture';
+import { agendaAnchor, renderCaptureOutcome } from '../src/routes/capture';
 import { spokenArea } from '../src/services/capture';
 
 describe('voice capture response', () => {
+  it('uses the day requested by the agenda question', () => {
+    expect(agendaAnchor('2026-09-21')).toBe(
+      Date.parse('2026-09-21T12:00:00Z'),
+    );
+  });
+
   it('speaks the inferred area with an Italian label', () => {
     expect(spokenArea('mg')).toBe('MG');
     expect(spokenArea('university')).toBe('università');

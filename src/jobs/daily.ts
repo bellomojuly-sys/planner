@@ -151,9 +151,10 @@ export function renderVoiceAgenda(
   timezone: string,
   now = Date.now(),
 ): string {
+  const isToday = agenda.dateKey === localDateKey(now, timezone);
   const items = [
     ...agenda.fixed
-      .filter((event) => event.kind === 'fixed' && event.end > now)
+      .filter((event) => event.kind === 'fixed' && (!isToday || event.end > now))
       .map((event) => ({
         title: event.title,
         start: event.start,
@@ -163,7 +164,9 @@ export function renderVoiceAgenda(
     ...agenda.blocks
       .filter(
         (block) =>
-          block.kind !== 'break' && block.kind !== 'buffer' && block.end > now,
+          block.kind !== 'break' &&
+          block.kind !== 'buffer' &&
+          (!isToday || block.end > now),
       )
       .map((block) => ({
         title: block.title,
@@ -173,15 +176,19 @@ export function renderVoiceAgenda(
       })),
   ].sort((a, b) => a.start - b.start);
 
-  if (items.length === 0) return 'Per oggi non hai più nulla in programma.';
+  if (items.length === 0) {
+    return isToday
+      ? 'Per oggi non hai più nulla in programma.'
+      : `Per ${agenda.dayLabel} non hai nulla in programma.`;
+  }
 
   const spoken = items.map((item) => {
     if (item.allDay) return `per tutto il giorno, ${item.title}`;
-    if (item.start <= now && item.end > now) return `adesso, ${item.title}`;
+    if (isToday && item.start <= now && item.end > now) return `adesso, ${item.title}`;
     return `alle ${formatTime(item.start, timezone)}, ${item.title}`;
   });
 
-  return `Oggi: ${spoken.join('; ')}.`;
+  return `${isToday ? 'Oggi' : `Piano di ${agenda.dayLabel}`}: ${spoken.join('; ')}.`;
 }
 
 // ---------------------------------------------------------------------------
