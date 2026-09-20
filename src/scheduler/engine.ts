@@ -129,7 +129,12 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   );
 
   const commitmentBuffers = buildCommitmentBuffers(input.busy, timezone);
-  const blocks: PlacedBlock[] = [...pinned, ...commitmentBuffers];
+  const contextBuffers = buildCommitmentBuffers(input.contexts ?? [], timezone);
+  const blocks: PlacedBlock[] = [
+    ...pinned,
+    ...commitmentBuffers,
+    ...contextBuffers,
+  ];
   const breakMs = settings.breakMinutes * MINUTE_MS;
 
   // A day with a shift has less room for anything else, whatever its free
@@ -294,7 +299,7 @@ export function schedule(input: ScheduleInput): ScheduleResult {
 }
 
 function buildCommitmentBuffers(
-  commitments: ScheduleInput['busy'],
+  commitments: NonNullable<ScheduleInput['contexts']> | ScheduleInput['busy'],
   timezone: string,
 ): PlacedBlock[] {
   const blocks: PlacedBlock[] = [];
@@ -315,7 +320,7 @@ function buildCommitmentBuffers(
     if (preparationMs > 0) {
       const start = commitment.start - outwardMs - preparationMs;
       components.push({
-        title: `Preparazione — ${title}`,
+        title: commitment.preparationLabel ?? `Preparazione — ${title}`,
         start,
         end: start + preparationMs,
         zone: zoneForInstant(start, timezone),
@@ -324,7 +329,7 @@ function buildCommitmentBuffers(
     if (outwardMs > 0) {
       const start = commitment.start - outwardMs;
       components.push({
-        title: `Viaggio verso — ${title}`,
+        title: commitment.travelBeforeLabel ?? `Viaggio verso — ${title}`,
         start,
         end: commitment.start,
         zone: zoneForInstant(start, timezone),
@@ -332,7 +337,7 @@ function buildCommitmentBuffers(
     }
     if (returnMs > 0) {
       components.push({
-        title: `Rientro — ${title}`,
+        title: commitment.travelAfterLabel ?? `Rientro — ${title}`,
         start: commitment.end,
         end: commitment.end + returnMs,
         zone: zoneForInstant(commitment.end, timezone),

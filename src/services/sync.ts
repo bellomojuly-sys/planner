@@ -820,7 +820,15 @@ export async function loadPlanningContexts(
   userId: string,
   from: number,
   to: number,
-): Promise<Array<{ start: number; end: number; allowedAreas: ['university'] }>> {
+): Promise<
+  Array<{
+    start: number;
+    end: number;
+    title: string;
+    location: string | null;
+    allowedAreas: ['university'];
+  }>
+> {
   const rows = await db
     .select()
     .from(calendarEvents)
@@ -841,6 +849,8 @@ export async function loadPlanningContexts(
     .map((event) => ({
       start: event.startAt,
       end: event.endAt,
+      title: event.title,
+      location: event.location,
       allowedAreas: ['university'] as ['university'],
     }));
 }

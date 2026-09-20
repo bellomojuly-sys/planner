@@ -30,7 +30,14 @@ export function buildSlots(params: {
       travelAfterMinutes?: number;
     }
   >;
-  contexts?: Array<Interval & { allowedAreas: Area[] }>;
+  contexts?: Array<
+    Interval & {
+      allowedAreas: Area[];
+      preparationBeforeMinutes?: number;
+      travelBeforeMinutes?: number;
+      travelAfterMinutes?: number;
+    }
+  >;
 }): Slot[] {
   const { from, to, timezone, settings } = params;
 
@@ -44,7 +51,22 @@ export function buildSlots(params: {
       b.end +
       (b.travelAfterMinutes ?? settings.bufferAroundEventsMinutes) * MINUTE_MS,
   }));
-  const busy = mergeIntervals(padded);
+  const contextBoundaries = (params.contexts ?? []).flatMap((context) => {
+    const before =
+      ((context.preparationBeforeMinutes ?? 0) +
+        (context.travelBeforeMinutes ?? 0)) *
+      MINUTE_MS;
+    const after = (context.travelAfterMinutes ?? 0) * MINUTE_MS;
+    return [
+      ...(before > 0
+        ? [{ start: context.start - before, end: context.start }]
+        : []),
+      ...(after > 0
+        ? [{ start: context.end, end: context.end + after }]
+        : []),
+    ];
+  });
+  const busy = mergeIntervals([...padded, ...contextBoundaries]);
 
   const slots: Slot[] = [];
   let cursor = startOfLocalDay(from, timezone);

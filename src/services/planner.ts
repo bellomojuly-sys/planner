@@ -21,7 +21,7 @@ import type {
 } from '../scheduler/types';
 import { buildDecisionBriefing, markMoved } from '../scheduler/decisions';
 import {
-  applyBusyPersonalRules,
+  applyCalendarPersonalRules,
   applyTaskPersonalRules,
 } from '../scheduler/personal-rules';
 import type { DepMap } from '../scheduler/dependencies';
@@ -160,22 +160,27 @@ export async function replan(
     const [
       openTasks,
       deps,
-      busy,
-      contexts,
+      busyRows,
+      contextRows,
       existingBlocks,
       calendarRouting,
       completedGymAt,
     ] = await Promise.all([
       loadSchedulableTasks(db, userId, prefs.settings),
       loadDependencies(db, userId),
-      loadBusyIntervals(db, userId, now, horizonEnd).then((rows) =>
-        rows.map((row) => applyBusyPersonalRules(row, prefs.settings)),
-      ),
+      loadBusyIntervals(db, userId, now, horizonEnd),
       loadPlanningContexts(db, userId, now, horizonEnd),
       loadFutureBlocks(db, userId, now),
       getCalendarRoutingMap(db, userId),
       loadCompletedGymAt(db, userId, Date.now()),
     ]);
+
+    const { busy, contexts } = applyCalendarPersonalRules(
+      busyRows,
+      contextRows,
+      prefs.settings,
+      prefs.timezone,
+    );
 
     const pinnedBlocks: PlacedBlock[] = existingBlocks
       .filter((b) => b.pinned)

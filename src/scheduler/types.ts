@@ -105,10 +105,26 @@ export interface ScheduleInput {
       preparationBeforeMinutes?: number;
       travelBeforeMinutes?: number;
       travelAfterMinutes?: number;
+      preparationLabel?: string;
+      travelBeforeLabel?: string;
+      travelAfterLabel?: string;
     }
   >;
   /** Productive context windows, such as Zelf Work, with an area boundary. */
-  contexts?: Array<Interval & { allowedAreas: Area[] }>;
+  contexts?: Array<
+    Interval & {
+      allowedAreas: Area[];
+      title?: string;
+      location?: string | null;
+      area?: Area;
+      preparationBeforeMinutes?: number;
+      travelBeforeMinutes?: number;
+      travelAfterMinutes?: number;
+      preparationLabel?: string;
+      travelBeforeLabel?: string;
+      travelAfterLabel?: string;
+    }
+  >;
   /** Blocks Giulia dragged by hand; treated as busy and re-emitted unchanged. */
   pinnedBlocks: PlacedBlock[];
   /**

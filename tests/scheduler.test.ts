@@ -3,6 +3,7 @@ import { schedule, urgencyScore } from '../src/scheduler/engine';
 import { buildSlots, SlotPool } from '../src/scheduler/slots';
 import {
   applyBusyPersonalRules,
+  applyCalendarPersonalRules,
   applyTaskPersonalRules,
 } from '../src/scheduler/personal-rules';
 import {
@@ -40,7 +41,8 @@ const settings: Settings = {
   maxBlockMinutes: 90,
   breakMinutes: 10,
   bufferAroundEventsMinutes: 15,
-  universityTravelMinutes: 15,
+  universityTravelMinutes: 20,
+  universityToWorkTravelMinutes: 25,
   universityPreparationMinutes: 60,
   universityShowerPreparationMinutes: 105,
   universityShowerDefault: false,
@@ -255,19 +257,98 @@ describe('confirmed personal reality rules', () => {
       settings,
     );
     const result = run([], { busy: [workshop] });
-    const buffers = result.blocks.filter((block) =>
-      block.title.endsWith('Workshop Den Bosch'),
-    );
+    const buffers = result.blocks.filter((block) => block.kind === 'buffer');
 
     expect(buffers.map((block) => block.title)).toEqual([
       'Preparazione — Workshop Den Bosch',
-      'Viaggio verso — Workshop Den Bosch',
-      'Rientro — Workshop Den Bosch',
+      'Viaggio casa → Den Bosch',
+      'Viaggio Den Bosch → casa',
     ]);
     expect(buffers.map((block) => (block.end - block.start) / 60_000)).toEqual([
       40, 90, 90,
     ]);
     expect(localMinutes(buffers[0]!.start, TZ)).toBe(6 * 60 + 50);
+  });
+
+  it('reserves one hour preparation and twenty minutes each way for university context', () => {
+    const contextStart = MONDAY + 2 * 3_600_000; // 09:00 Rome
+    const contextEnd = MONDAY + 5 * 3_600_000; // 12:00 Rome
+    const reality = applyCalendarPersonalRules(
+      [],
+      [
+        {
+          start: contextStart,
+          end: contextEnd,
+          title: 'Zelf Work Fontys',
+          allowedAreas: ['university'],
+        },
+      ],
+      settings,
+      TZ,
+    );
+    const result = run(
+      [task({ id: 'dani', title: 'Dani improvement', area: 'university' })],
+      { contexts: reality.contexts },
+    );
+    const contextBuffers = result.blocks.filter(
+      (block) => block.taskId === null && block.kind === 'buffer',
+    );
+
+    expect(reality.contexts[0]).toMatchObject({
+      preparationBeforeMinutes: 60,
+      travelBeforeMinutes: 20,
+      travelAfterMinutes: 20,
+    });
+    expect(contextBuffers.map((block) => block.title)).toEqual([
+      'Preparazione università',
+      'Viaggio casa → università',
+      'Viaggio università → casa',
+    ]);
+    expect(contextBuffers.map((block) => (block.end - block.start) / 60_000)).toEqual([
+      60, 20, 20,
+    ]);
+  });
+
+  it('uses a single 25 minute journey when going directly from university to work', () => {
+    const contextEnd = MONDAY + 9 * 3_600_000; // 16:00 Rome
+    const shiftStart = contextEnd + 60 * 60_000;
+    const reality = applyCalendarPersonalRules(
+      [
+        {
+          start: shiftStart,
+          end: shiftStart + 5 * 3_600_000,
+          title: 'Werken bij Arizona',
+          isShift: true,
+        },
+      ],
+      [
+        {
+          start: MONDAY + 6 * 3_600_000,
+          end: contextEnd,
+          title: 'Applied GenAI Fontys',
+          allowedAreas: ['university'],
+        },
+      ],
+      settings,
+      TZ,
+    );
+
+    expect(reality.contexts[0]).toMatchObject({
+      travelAfterMinutes: 25,
+      travelAfterLabel: 'Viaggio università → lavoro',
+    });
+    expect(reality.busy[0]).toMatchObject({ travelBeforeMinutes: 0 });
+
+    const result = run([], {
+      busy: reality.busy,
+      contexts: reality.contexts,
+    });
+    const journeyTitles = result.blocks
+      .filter((block) => block.kind === 'buffer')
+      .map((block) => block.title);
+
+    expect(journeyTitles).toContain('Viaggio università → lavoro');
+    expect(journeyTitles).not.toContain('Viaggio verso — Werken bij Arizona');
   });
 
   it('keeps undated adult-life bureaucracy on Sunday', () => {

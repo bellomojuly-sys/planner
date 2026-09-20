@@ -187,7 +187,10 @@ export const settings = sqliteTable('settings', {
 
   // Persistent Personal Rules. These are derived constraints, never manual
   // placeholder tasks. A task-level value always wins over the default.
-  universityTravelMinutes: integer('university_travel_minutes').notNull().default(15),
+  universityTravelMinutes: integer('university_travel_minutes').notNull().default(20),
+  universityToWorkTravelMinutes: integer('university_to_work_travel_minutes')
+    .notNull()
+    .default(25),
   universityPreparationMinutes: integer('university_preparation_minutes')
     .notNull()
     .default(60),

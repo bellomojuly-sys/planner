@@ -29,7 +29,8 @@ const settings: Settings = {
   maxBlockMinutes: 90,
   breakMinutes: 10,
   bufferAroundEventsMinutes: 15,
-  universityTravelMinutes: 15,
+  universityTravelMinutes: 20,
+  universityToWorkTravelMinutes: 25,
   universityPreparationMinutes: 60,
   universityShowerPreparationMinutes: 105,
   universityShowerDefault: false,
@@ -172,12 +173,27 @@ describe('decide-first classification', () => {
 });
 
 describe('Personal Rules and door-to-door reservations', () => {
-  it('derives university preparation and travel from persisted settings', () => {
+  it('does not add a commute to university project work done anywhere', () => {
     const derived = applyTaskPersonalRules(
       task({ id: 'uni', area: 'university', travelMinutes: 0, preparationMinutes: 0 }),
       settings,
     );
-    expect(derived.travelMinutes).toBe(15);
+    expect(derived.travelMinutes).toBe(0);
+    expect(derived.preparationMinutes).toBe(0);
+  });
+
+  it('adds preparation and travel to a task explicitly located at university', () => {
+    const derived = applyTaskPersonalRules(
+      task({
+        id: 'uni-physical',
+        area: 'university',
+        location: 'Fontys campus',
+        travelMinutes: 0,
+        preparationMinutes: 0,
+      }),
+      settings,
+    );
+    expect(derived.travelMinutes).toBe(20);
     expect(derived.preparationMinutes).toBe(60);
   });
 

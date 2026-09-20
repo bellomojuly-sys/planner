@@ -86,6 +86,7 @@ settingsRoutes.patch('/', requireAuth('full'), async (c) => {
       breakMinutes: z.number().int().min(0).max(120).optional(),
       bufferAroundEventsMinutes: z.number().int().min(0).max(120).optional(),
       universityTravelMinutes: z.number().int().min(0).max(240).optional(),
+      universityToWorkTravelMinutes: z.number().int().min(0).max(240).optional(),
       universityPreparationMinutes: z.number().int().min(0).max(240).optional(),
       universityShowerPreparationMinutes: z.number().int().min(0).max(300).optional(),
       universityShowerDefault: z.boolean().optional(),
