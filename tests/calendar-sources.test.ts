@@ -8,6 +8,7 @@ import {
   canWriteCalendar,
   suggestCalendarRole,
 } from '../src/services/calendar-sources';
+import { shouldBackfillCalendarId } from '../src/services/planner';
 import { classifyEvent } from '../src/services/sync';
 
 function calendar(overrides: Partial<GoogleCalendar> = {}): GoogleCalendar {
@@ -39,6 +40,12 @@ function event(overrides: Partial<GoogleEvent> = {}): GoogleEvent {
 }
 
 describe('Google calendar discovery', () => {
+  it('backfills a legacy null route only when the target is the fallback calendar', () => {
+    expect(shouldBackfillCalendarId(null, 'planner', 'planner')).toBe(true);
+    expect(shouldBackfillCalendarId(null, 'university', 'planner')).toBe(false);
+    expect(shouldBackfillCalendarId('planner', 'planner', 'planner')).toBe(false);
+  });
+
   it('uses the writable primary calendar as the planner destination', () => {
     expect(
       suggestCalendarRole(

@@ -673,11 +673,27 @@ async function reconcileBlocks(
       continue;
     }
 
-    // Pinned blocks are re-emitted unchanged; nothing to do.
-    if (prior.pinned) continue;
-
     const routeChanged =
       (prior.calendarId ?? calendarRouting.fallback) !== targetCalendarId;
+    const routeMetadataMissing = shouldBackfillCalendarId(
+      prior.calendarId,
+      targetCalendarId,
+      calendarRouting.fallback,
+    );
+
+    // Older rows predate calendar_id. Their Google event already lives in the
+    // fallback Planner calendar, so repair the local routing metadata without
+    // deleting or recreating the event. This also applies to pinned blocks.
+    if (routeMetadataMissing) {
+      await db
+        .update(scheduledBlocks)
+        .set({ calendarId: targetCalendarId })
+        .where(eq(scheduledBlocks.id, prior.id));
+    }
+
+    // Pinned blocks are re-emitted unchanged; nothing else to do.
+    if (prior.pinned) continue;
+
     const unchanged =
       prior.startAt === block.start &&
       prior.endAt === block.end &&
@@ -779,6 +795,15 @@ async function reconcileBlocks(
   }
 
   return diff;
+}
+
+/** A null route on a legacy block means the then-current fallback calendar. */
+export function shouldBackfillCalendarId(
+  priorCalendarId: string | null,
+  targetCalendarId: string,
+  fallbackCalendarId: string,
+): boolean {
+  return priorCalendarId === null && targetCalendarId === fallbackCalendarId;
 }
 
 function calendarForBlock(
