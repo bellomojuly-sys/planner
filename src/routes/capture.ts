@@ -2,12 +2,29 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppBindings } from '../auth/middleware';
 import { requireAuth } from '../auth/middleware';
-import { handleCapture } from '../services/capture';
+import { handleCapture, type CaptureResult } from '../services/capture';
 import { drainOutbox } from '../services/outbox';
 import { loadAgenda, renderVoiceAgenda } from '../jobs/daily';
 import { formatRange } from '../lib/time';
 
 export const captureRoutes = new Hono<AppBindings>();
+
+/**
+ * Never repeat the model's optimistic summary when the requested write failed.
+ * `summary` describes what DeepSeek understood; only `applied` proves that the
+ * action reached D1. Mixed utterances report both the success and the failure.
+ */
+export function renderCaptureOutcome(
+  result: Pick<CaptureResult, 'summary' | 'applied' | 'skipped'>,
+): string {
+  const applied = result.applied.join('. ');
+  const skipped = result.skipped.join('. ');
+
+  if (applied && skipped) return `${applied}. Non applicato: ${skipped}`;
+  if (applied) return applied;
+  if (skipped) return `Non ho salvato la richiesta: ${skipped}`;
+  return result.summary;
+}
 
 /**
  * The iPhone Action Button endpoint.
@@ -30,7 +47,7 @@ captureRoutes.post('/', requireAuth('capture'), async (c) => {
 
   // Answer questions inline so "cosa devo fare oggi?" works from the lock
   // screen without opening the app.
-  let spoken = result.summary;
+  let spoken = renderCaptureOutcome(result);
   if (result.answer) {
     const agenda = await loadAgenda(
       c.get('db'),
@@ -39,13 +56,13 @@ captureRoutes.post('/', requireAuth('capture'), async (c) => {
       Date.now(),
     );
     const next = agenda.blocks.filter((b) => b.end > Date.now()).slice(0, 3);
-    spoken = next.length
+    const agendaSpeech = next.length
       ? `Prossime cose: ${next
           .map((b) => `${b.title} alle ${formatRange(b.start, b.end, c.env.APP_TIMEZONE)}`)
           .join('; ')}`
       : 'Non hai altro in programma oggi.';
-  } else if (result.applied.length > 0) {
-    spoken = result.applied.join('. ');
+    const changed = result.applied.length > 0 || result.skipped.length > 0;
+    spoken = changed ? `${renderCaptureOutcome(result)}. ${agendaSpeech}` : agendaSpeech;
   }
 
   // Fire the Notion and Google writes now; the Shortcut has already got its
@@ -87,11 +104,10 @@ captureRoutes.post('/text', requireAuth('capture'), async (c) => {
       c.env.APP_TIMEZONE,
       Date.now(),
     );
-    const done = result.applied.length > 0 ? `${result.applied.join('. ')}. ` : '';
-    return c.text(done + renderVoiceAgenda(agenda, c.env.APP_TIMEZONE));
+    const changed = result.applied.length > 0 || result.skipped.length > 0;
+    const outcome = changed ? `${renderCaptureOutcome(result)}. ` : '';
+    return c.text(outcome + renderVoiceAgenda(agenda, c.env.APP_TIMEZONE));
   }
 
-  return c.text(
-    result.applied.length > 0 ? result.applied.join('. ') : result.summary,
-  );
+  return c.text(renderCaptureOutcome(result));
 });
