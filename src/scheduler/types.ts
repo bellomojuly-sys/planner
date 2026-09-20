@@ -26,6 +26,8 @@ export interface PlanDecision {
 export interface Slot extends Interval {
   zone: Zone;
   dayKey: string;
+  /** When present, only these task areas may consume this contextual window. */
+  allowedAreas?: Area[];
 }
 
 export interface SchedulableTask {
@@ -50,6 +52,10 @@ export interface SchedulableTask {
   phaseOrder: number | null;
   /** 0 = now, 1 = next, 2 = later; null when the source has no horizon. */
   horizon?: number | null;
+  /** JS weekdays (0 = Sunday) on which this kind of work belongs. */
+  preferredWeekdays?: number[];
+  /** When true, an undated task waits for a preferred day instead of leaking elsewhere. */
+  strictPreferredWeekdays?: boolean;
 }
 
 export interface PlacedBlock {
@@ -91,13 +97,18 @@ export interface ScheduleInput {
   /** Immovable commitments: shifts, lessons, exams. */
   busy: Array<
     Interval & {
+      title?: string;
       isShift?: boolean;
       location?: string | null;
+      area?: Area;
       /** Explicit asymmetric padding beats the generic event buffer. */
+      preparationBeforeMinutes?: number;
       travelBeforeMinutes?: number;
       travelAfterMinutes?: number;
     }
   >;
+  /** Productive context windows, such as Zelf Work, with an area boundary. */
+  contexts?: Array<Interval & { allowedAreas: Area[] }>;
   /** Blocks Giulia dragged by hand; treated as busy and re-emitted unchanged. */
   pinnedBlocks: PlacedBlock[];
   /**

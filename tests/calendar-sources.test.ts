@@ -97,6 +97,25 @@ describe('calendar event classification', () => {
     expect(classifyEvent(event({ allDay: true }), [], 'busy').kind).toBe('soft');
   });
 
+  it('keeps confirmed commitments fixed inside a contextual calendar', () => {
+    expect(
+      classifyEvent(event({ title: 'Workshop Den Bosch' }), [], 'context').kind,
+    ).toBe('fixed');
+    expect(classifyEvent(event({ title: 'contenuti' }), [], 'context').kind).toBe(
+      'fixed',
+    );
+    expect(classifyEvent(event({ title: 'Zumba' }), [], 'context').kind).toBe(
+      'fixed',
+    );
+    expect(
+      classifyEvent(
+        event({ title: 'Zumba', transparent: true }),
+        [],
+        'context',
+      ).kind,
+    ).toBe('fixed');
+  });
+
   it('recognises restaurant shifts from defaults and configured keywords', () => {
     expect(classifyEvent(event({ title: 'Turno ristorante' }), [], 'busy').isShift).toBe(
       true,

@@ -25,7 +25,11 @@ import {
   applyTaskPersonalRules,
 } from '../scheduler/personal-rules';
 import type { DepMap } from '../scheduler/dependencies';
-import { loadBusyIntervals, inferPhaseDependencies } from './sync';
+import {
+  loadBusyIntervals,
+  loadPlanningContexts,
+  inferPhaseDependencies,
+} from './sync';
 import { getCalendarRoutingMap, getPlannerCalendarId } from './calendar-sources';
 import { DAY_MS, localDateKey, formatRange } from '../lib/time';
 import { toPlannerError } from '../lib/errors';
@@ -157,6 +161,7 @@ export async function replan(
       openTasks,
       deps,
       busy,
+      contexts,
       existingBlocks,
       calendarRouting,
       completedGymAt,
@@ -166,6 +171,7 @@ export async function replan(
       loadBusyIntervals(db, userId, now, horizonEnd).then((rows) =>
         rows.map((row) => applyBusyPersonalRules(row, prefs.settings)),
       ),
+      loadPlanningContexts(db, userId, now, horizonEnd),
       loadFutureBlocks(db, userId, now),
       getCalendarRoutingMap(db, userId),
       loadCompletedGymAt(db, userId, Date.now()),
@@ -187,6 +193,7 @@ export async function replan(
       tasks: openTasks,
       dependencies: deps,
       busy,
+      contexts,
       pinnedBlocks,
       knownTaskEnds,
       completedGymAt,
@@ -454,11 +461,17 @@ function toPlacedBlock(b: typeof scheduledBlocks.$inferSelect): PlacedBlock {
 
 /**
  * Stable identity for a block across replans. Task blocks are keyed by task
- * and part; gym sessions have no task, so they are keyed by the day they
- * belong to — moving gym within a day reuses the same calendar event.
+ * and part. Generated reality blocks have no task, so their title keeps
+ * preparation, travel, gym and return components distinct on the same day.
  */
 function blockKey(
-  block: { taskId: string | null; partIndex: number; kind: string; start: number },
+  block: {
+    taskId: string | null;
+    title: string;
+    partIndex: number;
+    kind: string;
+    start: number;
+  },
   timezone: string,
 ): string {
   if (block.taskId && block.kind === 'task') {
@@ -467,7 +480,8 @@ function blockKey(
   if (block.taskId) {
     return `task:${block.taskId}:${block.kind}:${block.partIndex}`;
   }
-  return `${block.kind}:${localDateKey(block.start, timezone)}:${block.partIndex}`;
+  const title = block.title.trim().toLocaleLowerCase('it-IT').replace(/\s+/g, ' ');
+  return `${block.kind}:${localDateKey(block.start, timezone)}:${title}:${block.partIndex}`;
 }
 
 function withMoveDecisions(
@@ -480,6 +494,7 @@ function withMoveDecisions(
       blockKey(
         {
           taskId: block.taskId,
+          title: block.title,
           partIndex: block.partIndex,
           kind: block.kind,
           start: block.startAt,
@@ -545,6 +560,7 @@ function previewPlanDiff(
       blockKey(
         {
           taskId: block.taskId,
+          title: block.title,
           partIndex: block.partIndex,
           kind: block.kind,
           start: block.startAt,
@@ -630,7 +646,13 @@ async function reconcileBlocks(
   const existingByKey = new Map(
     existing.map((b) => [
       blockKey(
-        { taskId: b.taskId, partIndex: b.partIndex, kind: b.kind, start: b.startAt },
+        {
+          taskId: b.taskId,
+          title: b.title,
+          partIndex: b.partIndex,
+          kind: b.kind,
+          start: b.startAt,
+        },
         timezone,
       ),
       b,
@@ -644,6 +666,7 @@ async function reconcileBlocks(
     const key = blockKey(
       {
         taskId: block.taskId,
+        title: block.title,
         partIndex: block.partIndex,
         kind: block.kind,
         start: block.start,

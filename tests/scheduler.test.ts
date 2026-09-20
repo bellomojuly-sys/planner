@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { schedule } from '../src/scheduler/engine';
+import { schedule, urgencyScore } from '../src/scheduler/engine';
 import { buildSlots, SlotPool } from '../src/scheduler/slots';
+import {
+  applyBusyPersonalRules,
+  applyTaskPersonalRules,
+} from '../src/scheduler/personal-rules';
 import {
   topologicalOrder,
   collectDescendants,
@@ -15,7 +19,7 @@ import {
   localWeekday,
   localDateKey,
 } from '../src/lib/time';
-import type { SchedulableTask } from '../src/scheduler/types';
+import type { ScheduleInput, SchedulableTask } from '../src/scheduler/types';
 import type { Settings } from '../src/db/schema';
 
 const TZ = 'Europe/Rome';
@@ -84,7 +88,8 @@ function run(
   tasks: SchedulableTask[],
   options: {
     deps?: DepMap;
-    busy?: Array<{ start: number; end: number }>;
+    busy?: ScheduleInput['busy'];
+    contexts?: ScheduleInput['contexts'];
     settingsOverride?: Partial<Settings>;
     days?: number;
   } = {},
@@ -97,6 +102,7 @@ function run(
     tasks,
     dependencies: options.deps ?? new Map(),
     busy: options.busy ?? [],
+    contexts: options.contexts,
     pinnedBlocks: [],
   });
 }
@@ -144,6 +150,24 @@ describe('slot generation', () => {
     });
 
     expect(localMinutes(slots[0]!.start, TZ)).toBe(9 * 60 + 30);
+  });
+
+  it('never creates automatic task time before 09:00 even with an early sleep profile', () => {
+    const slots = buildSlots({
+      from: MONDAY,
+      to: MONDAY + 86_400_000,
+      timezone: TZ,
+      settings: {
+        ...settings,
+        dayStartMinutes: 6 * 60,
+        sleepStartMinutes: 20 * 60,
+        sleepTargetMinutes: 4 * 60,
+        wakeBufferMinutes: 0,
+      },
+      busy: [],
+    });
+
+    expect(localMinutes(slots[0]!.start, TZ)).toBe(9 * 60);
   });
 
   it('never produces a slot spanning two energy zones', () => {
@@ -201,6 +225,96 @@ describe('slot generation', () => {
       { start: 0, end: 30, zone: 'morning', dayKey: '2026-01-12' },
       { start: 50, end: 100, zone: 'morning', dayKey: '2026-01-12' },
     ]);
+  });
+});
+
+describe('confirmed personal reality rules', () => {
+  it('reserves preparation and both journeys for the first Den Bosch workshop', () => {
+    const event = applyBusyPersonalRules(
+      {
+        start: Date.parse('2026-01-14T09:00:00Z'),
+        end: Date.parse('2026-01-14T11:00:00Z'),
+        title: 'Workshop Den Bosch',
+        location: null,
+      },
+      settings,
+    );
+
+    expect(event.preparationBeforeMinutes).toBe(40);
+    expect(event.travelBeforeMinutes).toBe(90);
+    expect(event.travelAfterMinutes).toBe(90);
+  });
+
+  it('shows Den Bosch preparation and journeys as separate calendar blocks', () => {
+    const workshop = applyBusyPersonalRules(
+      {
+        start: Date.parse('2026-01-14T08:00:00Z'), // 09:00 Rome
+        end: Date.parse('2026-01-14T11:00:00Z'),
+        title: 'Workshop Den Bosch',
+      },
+      settings,
+    );
+    const result = run([], { busy: [workshop] });
+    const buffers = result.blocks.filter((block) =>
+      block.title.endsWith('Workshop Den Bosch'),
+    );
+
+    expect(buffers.map((block) => block.title)).toEqual([
+      'Preparazione — Workshop Den Bosch',
+      'Viaggio verso — Workshop Den Bosch',
+      'Rientro — Workshop Den Bosch',
+    ]);
+    expect(buffers.map((block) => (block.end - block.start) / 60_000)).toEqual([
+      40, 90, 90,
+    ]);
+    expect(localMinutes(buffers[0]!.start, TZ)).toBe(6 * 60 + 50);
+  });
+
+  it('keeps undated adult-life bureaucracy on Sunday', () => {
+    const duo = applyTaskPersonalRules(
+      task({ id: 'duo', title: 'Iscrizione DUO', plannedMinutes: 60 }),
+      settings,
+    );
+    const result = run([duo]);
+    const block = result.blocks.find((candidate) => candidate.taskId === duo.id)!;
+
+    expect(localDateKey(block.start, TZ)).toBe('2026-01-18');
+  });
+
+  it('uses university context for university work but not unrelated work', () => {
+    const contextStart = MONDAY + 2 * 3_600_000; // 09:00 Rome
+    const contextEnd = MONDAY + 5 * 3_600_000; // 12:00 Rome
+    const result = run(
+      [
+        task({ id: 'uni', title: 'Dani improvement', area: 'university', energy: 'high' }),
+        task({ id: 'work', title: 'Heemia task', area: 'heemia', energy: 'high' }),
+      ],
+      {
+        days: 1,
+        settingsOverride: { dayEndMinutes: 12 * 60 },
+        contexts: [
+          { start: contextStart, end: contextEnd, allowedAreas: ['university'] },
+        ],
+      },
+    );
+
+    const university = result.blocks.find((block) => block.taskId === 'uni');
+    expect(university?.start).toBeGreaterThanOrEqual(contextStart);
+    expect(university?.end).toBeLessThanOrEqual(contextEnd);
+    expect(result.blocks.some((block) => block.taskId === 'work')).toBe(false);
+  });
+
+  it('ranks Heemia above generic flexible work and LinkedIn last', () => {
+    const heemia = task({ id: 'heemia', title: 'Heemia operativo', area: 'heemia' });
+    const generic = task({ id: 'generic', title: 'Riordinare appunti' });
+    const linkedin = task({ id: 'linkedin', title: 'Aggiornare LinkedIn' });
+
+    expect(urgencyScore(heemia, MONDAY, 0)).toBeGreaterThan(
+      urgencyScore(generic, MONDAY, 0),
+    );
+    expect(urgencyScore(linkedin, MONDAY, 0)).toBeLessThan(
+      urgencyScore(generic, MONDAY, 0),
+    );
   });
 });
 
@@ -548,12 +662,37 @@ describe('gym', () => {
     expect(doorToDoor.map((block) => block.title)).toEqual([
       'Viaggio verso palestra',
       'Palestra',
-      'Doccia / cambio',
       'Ritorno dalla palestra',
+      'Doccia / cambio',
     ]);
     expect(
       (doorToDoor.at(-1)!.end - doorToDoor[0]!.start) / 60_000,
     ).toBe(145);
+  });
+
+  it('wraps Monday gym around Zumba and showers after returning home', () => {
+    const zumbaStart = MONDAY + (13 * 60 + 15) * 60_000; // 20:15 Rome
+    const zumbaEnd = zumbaStart + 45 * 60_000;
+    const result = run([], {
+      settingsOverride: { gymSessionsPerWeek: 1, gymPreferredDays: '1,3,5' },
+      busy: [{ start: zumbaStart, end: zumbaEnd, title: 'Zumba' }],
+    });
+    const monday = result.blocks
+      .filter((block) => localDateKey(block.start, TZ) === '2026-01-12')
+      .filter((block) => block.taskId === null);
+
+    expect(monday.map((block) => block.title)).toEqual([
+      'Viaggio verso palestra',
+      'Palestra',
+      'Ritorno dalla palestra',
+      'Doccia / cambio',
+    ]);
+    expect(monday.find((block) => block.title === 'Palestra')!.end).toBeLessThan(
+      zumbaStart,
+    );
+    expect(
+      monday.find((block) => block.title === 'Ritorno dalla palestra')!.start,
+    ).toBeGreaterThan(zumbaEnd);
   });
 
   it('falls back from preferred days but never uses avoided days', () => {

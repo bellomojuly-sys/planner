@@ -442,10 +442,24 @@ export function classifyEvent(
   const shiftHaystack = `${haystack} ${calendarSummary}`.toLowerCase();
   const isShift = /turno|ristorante|shift|servizio|eitje/.test(shiftHaystack);
 
-  // An explicit Google "free" event and an all-day marker are useful context
-  // but must not erase an entire planning day. Context windows such as Zelf
-  // Work are likewise visible inputs inside which related work may be planned.
-  if (role === 'context' || event.transparent || event.allDay) {
+  const explicitFixed = keywords.some((keyword) => haystack.includes(keyword));
+  const isWorkContext = /zelf\s*work|self\s*work|applied\s*genai/.test(haystack);
+  const isConfirmedCommitment =
+    /workshop|den\s*bosch|denbosch|contenut|zumba/.test(haystack);
+
+  // Confirmed timed commitments stay fixed even when their source calendar is
+  // contextual or Google marks them as "free". An all-day marker remains soft
+  // because it must not erase an entire planning day. Broad university work
+  // windows can contain related executable tasks.
+  if (!event.allDay && isConfirmedCommitment) {
+    return { kind: 'fixed', isShift };
+  }
+  if (
+    event.transparent ||
+    event.allDay ||
+    isWorkContext ||
+    (role === 'context' && !explicitFixed)
+  ) {
     return { kind: 'soft', isShift };
   }
   return { kind: 'fixed', isShift };
@@ -793,6 +807,41 @@ export async function loadBusyIntervals(
       title: e.title,
       isShift: e.isShift,
       location: e.location,
+    }));
+}
+
+/**
+ * Broad university blocks are productive context, not generic free time.
+ * They may contain related university work but must not be filled with Heemia,
+ * LinkedIn, gym or unrelated administration.
+ */
+export async function loadPlanningContexts(
+  db: DB,
+  userId: string,
+  from: number,
+  to: number,
+): Promise<Array<{ start: number; end: number; allowedAreas: ['university'] }>> {
+  const rows = await db
+    .select()
+    .from(calendarEvents)
+    .where(
+      and(
+        eq(calendarEvents.userId, userId),
+        eq(calendarEvents.kind, 'soft'),
+        gte(calendarEvents.endAt, from),
+      ),
+    );
+
+  return rows
+    .filter((event) => {
+      if (event.cancelled || event.allDay || event.startAt >= to) return false;
+      const text = `${event.title} ${event.location ?? ''}`.toLowerCase();
+      return /zelf\s*work|self\s*work|applied\s*genai|fontys|universit/.test(text);
+    })
+    .map((event) => ({
+      start: event.startAt,
+      end: event.endAt,
+      allowedAreas: ['university'] as ['university'],
     }));
 }
 

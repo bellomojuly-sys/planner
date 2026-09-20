@@ -1,4 +1,5 @@
 import type { Settings } from '../db/schema';
+import type { Area } from '../db/schema';
 import {
   atLocalMinutes,
   addLocalDays,
@@ -23,15 +24,22 @@ export function buildSlots(params: {
   timezone: string;
   settings: Settings;
   busy: Array<
-    Interval & { travelBeforeMinutes?: number; travelAfterMinutes?: number }
+    Interval & {
+      preparationBeforeMinutes?: number;
+      travelBeforeMinutes?: number;
+      travelAfterMinutes?: number;
+    }
   >;
+  contexts?: Array<Interval & { allowedAreas: Area[] }>;
 }): Slot[] {
   const { from, to, timezone, settings } = params;
 
   const padded = params.busy.map((b) => ({
     start:
       b.start -
-      (b.travelBeforeMinutes ?? settings.bufferAroundEventsMinutes) * MINUTE_MS,
+      ((b.preparationBeforeMinutes ?? 0) +
+        (b.travelBeforeMinutes ?? settings.bufferAroundEventsMinutes)) *
+        MINUTE_MS,
     end:
       b.end +
       (b.travelAfterMinutes ?? settings.bufferAroundEventsMinutes) * MINUTE_MS,
@@ -51,10 +59,13 @@ export function buildSlots(params: {
         settings.sleepTargetMinutes +
         settings.wakeBufferMinutes) %
       (24 * 60);
+    // Giulia's explicit floor: automatic work never starts before 09:00.
+    // Necessary preparation and travel are busy intervals, not automatic
+    // tasks, so early real-world departures remain possible.
     const dayStart = atLocalMinutes(
       cursor,
       timezone,
-      Math.max(settings.dayStartMinutes, restedStartMinutes),
+      Math.max(9 * 60, settings.dayStartMinutes, restedStartMinutes),
     );
     const dayEnd = atLocalMinutes(cursor, timezone, settings.dayEndMinutes);
     const morningEnd = atLocalMinutes(
@@ -85,6 +96,7 @@ export function buildSlots(params: {
           morningEnd,
           afternoonEnd,
           dayKey,
+          params.contexts ?? [],
         )) {
           if (zoned.end - zoned.start >= settings.minBlockMinutes * MINUTE_MS) {
             slots.push(zoned);
@@ -104,8 +116,10 @@ function splitByZone(
   morningEnd: number,
   afternoonEnd: number,
   dayKey: string,
+  contexts: Array<Interval & { allowedAreas: Area[] }>,
 ): Slot[] {
-  const cuts = [piece.start, morningEnd, afternoonEnd, piece.end]
+  const contextCuts = contexts.flatMap((context) => [context.start, context.end]);
+  const cuts = [piece.start, morningEnd, afternoonEnd, piece.end, ...contextCuts]
     .filter((t) => t >= piece.start && t <= piece.end)
     .sort((a, b) => a - b);
 
@@ -114,7 +128,20 @@ function splitByZone(
     const start = cuts[i]!;
     const end = cuts[i + 1]!;
     if (end <= start) continue;
-    out.push({ start, end, dayKey, zone: zoneAt(start, morningEnd, afternoonEnd) });
+    const allowedAreas = [
+      ...new Set(
+        contexts
+          .filter((context) => context.start < end && start < context.end)
+          .flatMap((context) => context.allowedAreas),
+      ),
+    ];
+    out.push({
+      start,
+      end,
+      dayKey,
+      zone: zoneAt(start, morningEnd, afternoonEnd),
+      ...(allowedAreas.length > 0 ? { allowedAreas } : {}),
+    });
   }
   return out;
 }

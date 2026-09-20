@@ -4,6 +4,7 @@ import {
   atLocalMinutes,
   addLocalDays,
   localDateKey,
+  localMinutes,
 } from '../lib/time';
 import { buildSlots, SlotPool, ZONE_PREFERENCE } from './slots';
 import { topologicalOrder, type DepMap } from './dependencies';
@@ -117,10 +118,18 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   }
 
   const pool = new SlotPool(
-    buildSlots({ from: now, to: horizonEnd, timezone, settings, busy }),
+    buildSlots({
+      from: now,
+      to: horizonEnd,
+      timezone,
+      settings,
+      busy,
+      contexts: input.contexts,
+    }),
   );
 
-  const blocks: PlacedBlock[] = [...pinned];
+  const commitmentBuffers = buildCommitmentBuffers(input.busy, timezone);
+  const blocks: PlacedBlock[] = [...pinned, ...commitmentBuffers];
   const breakMs = settings.breakMinutes * MINUTE_MS;
 
   // A day with a shift has less room for anything else, whatever its free
@@ -154,6 +163,7 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     now,
     horizonEnd,
     breakMs,
+    busy: input.busy,
     alreadyScheduled: explicitGym.length,
     completedGymAt: input.completedGymAt ?? [],
   });
@@ -283,13 +293,81 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   };
 }
 
+function buildCommitmentBuffers(
+  commitments: ScheduleInput['busy'],
+  timezone: string,
+): PlacedBlock[] {
+  const blocks: PlacedBlock[] = [];
+  for (const commitment of commitments) {
+    const title = commitment.title ?? 'Impegno';
+    const preparationMs = (commitment.preparationBeforeMinutes ?? 0) * MINUTE_MS;
+    const outwardMs = (commitment.travelBeforeMinutes ?? 0) * MINUTE_MS;
+    const returnMs = (commitment.travelAfterMinutes ?? 0) * MINUTE_MS;
+    const area = commitment.area;
+    const zone = zoneForInstant(commitment.start, timezone);
+    const components: Array<{
+      title: string;
+      start: number;
+      end: number;
+      zone: Zone;
+    }> = [];
+
+    if (preparationMs > 0) {
+      const start = commitment.start - outwardMs - preparationMs;
+      components.push({
+        title: `Preparazione — ${title}`,
+        start,
+        end: start + preparationMs,
+        zone: zoneForInstant(start, timezone),
+      });
+    }
+    if (outwardMs > 0) {
+      const start = commitment.start - outwardMs;
+      components.push({
+        title: `Viaggio verso — ${title}`,
+        start,
+        end: commitment.start,
+        zone: zoneForInstant(start, timezone),
+      });
+    }
+    if (returnMs > 0) {
+      components.push({
+        title: `Rientro — ${title}`,
+        start: commitment.end,
+        end: commitment.end + returnMs,
+        zone: zoneForInstant(commitment.end, timezone),
+      });
+    }
+
+    components.forEach((component, partIndex) => {
+      blocks.push({
+        taskId: null,
+        ...component,
+        kind: 'buffer',
+        partIndex,
+        partCount: components.length,
+        zoneCompromised: component.zone !== zone,
+        area,
+      });
+    });
+  }
+  return blocks;
+}
+
+function zoneForInstant(ts: number, timezone: string): Zone {
+  const minutes = localMinutes(ts, timezone);
+  if (minutes < 13 * 60) return 'morning';
+  if (minutes < 18 * 60) return 'afternoon';
+  return 'evening';
+}
+
 function overlaps(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
   return aStart < bEnd && bStart < aEnd;
 }
 
 // ---------------------------------------------------------------------------
 
-function urgencyScore(
+export function urgencyScore(
   task: SchedulableTask,
   now: number,
   blocking: number,
@@ -312,6 +390,12 @@ function urgencyScore(
   // horizon (its source has none) is neither pushed nor held back.
   if (task.horizon === 0) score += 25;
   else if (task.horizon === 2) score -= 25;
+
+  const text = `${task.title} ${task.projectKey ?? ''}`.toLowerCase();
+  // Confirmed default ordering for flexible work. Concrete deadlines still
+  // dominate these modest project-level nudges.
+  if (task.area === 'heemia' || /\bheemia\b/.test(text)) score += 20;
+  if (/linkedin|opportunit[aà] di lavoro|ricerca lavoro/.test(text)) score -= 40;
 
   return score;
 }
@@ -391,6 +475,28 @@ function placeTask(params: {
    */
   const deadline = task.dueAt !== null && task.dueAt > earliest ? task.dueAt : null;
 
+  if (task.preferredWeekdays?.length) {
+    for (const zones of [preferredOnly, preference]) {
+      const preferredAttempt = tryPlaceParts({
+        task,
+        pool,
+        budget,
+        zones,
+        partCount,
+        partMs,
+        breakMs,
+        earliest,
+        deadline,
+        compromised: zones !== preferredOnly,
+        weekdays: task.preferredWeekdays,
+      });
+      if (preferredAttempt) return { blocks: preferredAttempt };
+    }
+    if (task.strictPreferredWeekdays) {
+      return { blocks: [], reason: 'no_free_time' };
+    }
+  }
+
   // Attempt 1: preferred zone only, anywhere in the horizon.
   // Attempt 2: the full fallback chain.
   for (const zones of [preferredOnly, preference]) {
@@ -423,6 +529,7 @@ function tryPlaceParts(params: {
   earliest: number;
   deadline: number | null;
   compromised: boolean;
+  weekdays?: number[];
 }): PlacedBlock[] | null {
   const { task, pool, zones, partCount, partMs, breakMs } = params;
 
@@ -447,7 +554,10 @@ function tryPlaceParts(params: {
       notBefore: cursor,
       notAfter: params.deadline,
       zones,
-      accept: (slot: Slot) => scratchBudget.fits(slot.dayKey, task.area, task.id, partMs),
+      accept: (slot: Slot) =>
+        (!slot.allowedAreas || slot.allowedAreas.includes(task.area)) &&
+        (!params.weekdays || params.weekdays.includes(weekdayOfDayKey(slot.dayKey))) &&
+        scratchBudget.fits(slot.dayKey, task.area, task.id, partMs),
     });
     if (!found) return null;
 
@@ -539,6 +649,11 @@ function tryPlaceParts(params: {
   return out;
 }
 
+function weekdayOfDayKey(dayKey: string): number {
+  // Noon UTC avoids a timezone boundary while preserving the calendar date.
+  return new Date(`${dayKey}T12:00:00Z`).getUTCDay();
+}
+
 /**
  * Reserves complete door-to-door gym sessions: outward travel, workout,
  * shower/change and return. Preferred days win, avoided days are excluded,
@@ -551,6 +666,7 @@ function placeGymSessions(params: {
   now: number;
   horizonEnd: number;
   breakMs: number;
+  busy: ScheduleInput['busy'];
   alreadyScheduled: number;
   completedGymAt: number[];
 }): PlacedBlock[] {
@@ -561,6 +677,7 @@ function placeGymSessions(params: {
     now,
     horizonEnd,
     breakMs,
+    busy,
     alreadyScheduled,
     completedGymAt,
   } = params;
@@ -616,6 +733,88 @@ function placeGymSessions(params: {
         : 0,
     );
     const weekDays = days.slice(weekIndex * 7, weekIndex * 7 + 7);
+
+    // Monday Zumba is part of the real workout sequence, not a reason to drop
+    // the preferred Monday gym. Fit travel + gym before it, then return home
+    // and shower after it. The calendar event itself remains the source of
+    // truth for Zumba and is therefore not duplicated as a Planner block.
+    const weekKeys = new Set(weekDays.map((day) => localDateKey(day, timezone)));
+    const zumba = busy.find(
+      (event) =>
+        /zumba/i.test(event.title ?? '') &&
+        weekKeys.has(localDateKey(event.start, timezone)),
+    );
+    if ((perWeek.get(weekIndex) ?? 0) < target && zumba) {
+      const bufferMs = settings.bufferAroundEventsMinutes * MINUTE_MS;
+      const preEnd = zumba.start - bufferMs;
+      const preStart = preEnd - outwardMs - workoutMs;
+      const postStart = zumba.end + bufferMs;
+      const postEnd = postStart + returnMs + preparationMs;
+      const preSlot = pool
+        .list()
+        .find(
+          (slot) =>
+            !slot.allowedAreas && slot.start <= preStart && slot.end >= preEnd,
+        );
+      const postSlot = pool
+        .list()
+        .find(
+          (slot) =>
+            !slot.allowedAreas && slot.start <= postStart && slot.end >= postEnd,
+        );
+      const workoutStart = preStart + outwardMs;
+      if (
+        preSlot &&
+        postSlot &&
+        workoutStart >= now &&
+        workoutStart >= lastWorkoutEnd + settings.gymMinRecoveryHours * 60 * MINUTE_MS
+      ) {
+        pool.consume(preSlot, preStart, preEnd - preStart, 0);
+        pool.consume(postSlot, postStart, postEnd - postStart, breakMs);
+        const sequence = [
+          {
+            title: 'Viaggio verso palestra',
+            start: preStart,
+            end: preStart + outwardMs,
+            kind: 'buffer' as const,
+            zone: preSlot.zone,
+          },
+          {
+            title: 'Palestra',
+            start: preStart + outwardMs,
+            end: preEnd,
+            kind: 'gym' as const,
+            zone: preSlot.zone,
+          },
+          {
+            title: 'Ritorno dalla palestra',
+            start: postStart,
+            end: postStart + returnMs,
+            kind: 'buffer' as const,
+            zone: postSlot.zone,
+          },
+          {
+            title: 'Doccia / cambio',
+            start: postStart + returnMs,
+            end: postEnd,
+            kind: 'buffer' as const,
+            zone: postSlot.zone,
+          },
+        ];
+        sequence.forEach((component, partIndex) => {
+          out.push({
+            taskId: null,
+            ...component,
+            partIndex,
+            partCount: sequence.length,
+            zoneCompromised: component.zone !== 'evening',
+          });
+        });
+        lastWorkoutEnd = preEnd;
+        perWeek.set(weekIndex, (perWeek.get(weekIndex) ?? 0) + 1);
+      }
+    }
+
     const candidates = [
       ...weekDays.filter((day) => preferred.has(localWeekday(day, timezone))),
       ...weekDays.filter((day) => !preferred.has(localWeekday(day, timezone))),
@@ -636,6 +835,7 @@ function placeGymSessions(params: {
         ),
         notAfter: dayStart + DAY_MS,
         zones: ['evening', 'afternoon'],
+        accept: (slot) => !slot.allowedAreas,
       });
       if (!found) continue;
 
@@ -647,8 +847,8 @@ function placeGymSessions(params: {
       }> = [
         { title: 'Viaggio verso palestra', ms: outwardMs, kind: 'buffer' },
         { title: 'Palestra', ms: workoutMs, kind: 'gym' },
-        { title: 'Doccia / cambio', ms: preparationMs, kind: 'buffer' },
         { title: 'Ritorno dalla palestra', ms: returnMs, kind: 'buffer' },
+        { title: 'Doccia / cambio', ms: preparationMs, kind: 'buffer' },
       ];
       let cursor = found.start;
       components.forEach((component, partIndex) => {
