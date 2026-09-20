@@ -8,6 +8,7 @@ import {
   calendarSources,
   calendarSyncState,
   settings as settingsTable,
+  scheduledBlocks,
 } from '../db/schema';
 import * as notion from '../integrations/notion';
 import { fetchIcsEvents } from '../integrations/ics';
@@ -32,6 +33,8 @@ export interface SyncReport {
   tasksSkipped: number;
   /** True when something changed that should trigger a reschedule. */
   changed: boolean;
+  /** Planner blocks that Giulia moved directly in Google Calendar. */
+  plannerMoves: Array<{ blockId: string; start: number; end: number }>;
   errors: string[];
 }
 
@@ -43,6 +46,7 @@ function emptyReport(): SyncReport {
     eventsRemoved: 0,
     tasksSkipped: 0,
     changed: false,
+    plannerMoves: [],
     errors: [],
   };
 }
@@ -54,6 +58,7 @@ function mergeReport(target: SyncReport, source: SyncReport): void {
   target.eventsRemoved += source.eventsRemoved;
   target.tasksSkipped += source.tasksSkipped;
   target.changed ||= source.changed;
+  target.plannerMoves.push(...source.plannerMoves);
   target.errors.push(...source.errors);
 }
 
@@ -438,8 +443,8 @@ export function classifyEvent(
   const isShift = /turno|ristorante|shift|servizio|eitje/.test(shiftHaystack);
 
   // An explicit Google "free" event and an all-day marker are useful context
-  // but must not erase an entire planning day. A context calendar is likewise
-  // visible without contributing to the busy mask.
+  // but must not erase an entire planning day. Context windows such as Zelf
+  // Work are likewise visible inputs inside which related work may be planned.
   if (role === 'context' || event.transparent || event.allDay) {
     return { kind: 'soft', isShift };
   }
@@ -463,9 +468,30 @@ export async function upsertCalendarEvents(
   const report = emptyReport();
 
   for (const event of events) {
-    // Our own planner blocks come back on the feed; ignoring them here is what
-    // stops the scheduler treating yesterday's plan as immovable.
-    if (event.isPlannerBlock) continue;
+    // Our blocks must not enter the fixed-event mirror, but their times cannot
+    // be ignored: a drag in Google Calendar is a real manual move. Report it
+    // to the caller, which temporarily pins it through one cascade replan.
+    if (event.isPlannerBlock) {
+      if (!event.cancelled && event.plannerBlockId) {
+        const block = await db.query.scheduledBlocks.findFirst({
+          where: and(
+            eq(scheduledBlocks.userId, userId),
+            eq(scheduledBlocks.id, event.plannerBlockId),
+          ),
+        });
+        if (
+          block &&
+          (block.startAt !== event.startAt || block.endAt !== event.endAt)
+        ) {
+          report.plannerMoves.push({
+            blockId: block.id,
+            start: event.startAt,
+            end: event.endAt,
+          });
+        }
+      }
+      continue;
+    }
 
     if (event.cancelled) {
       const deleted = await db

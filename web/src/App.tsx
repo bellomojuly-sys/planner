@@ -181,6 +181,7 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
     ) ?? [];
   const unplaced = plan?.lastRun?.summary?.unplaced ?? [];
   const decisionBriefing = plan?.lastRun?.summary?.briefing ?? [];
+  const viewingToday = sameDay(day, startOfDay(Date.now()));
   const pendingConfirmation =
     plan?.lastRun?.status === 'pending_confirmation'
       ? plan.lastRun.summary
@@ -265,7 +266,7 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
 
         {view === 'day' && (
           <>
-            {decisionBriefing.length > 0 && (
+            {viewingToday && decisionBriefing.length > 0 && (
               <div className="card">
                 <h2>Decisione del piano</h2>
                 <ol className="list__meta">
@@ -275,17 +276,20 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
                 </ol>
               </div>
             )}
-            {unplaced.length > 0 && (
-              <div className="banner" data-tone="warn">
-                {unplaced.map((item) => {
-                  const label =
-                    item.outcome === 'needs_decision'
-                      ? 'Serve una scelta'
-                      : item.outcome === 'delegation_candidate'
-                        ? 'Candidata per Jarvis'
-                        : 'Rinviata';
-                  return `${label}: ${item.title}`;
-                }).join(' · ')}
+            {viewingToday && unplaced.length > 0 && (
+              <div className="card">
+                <h2>Attività non ancora collocate nel piano</h2>
+                <ul className="list__meta">
+                  {unplaced.map((item) => {
+                    const label =
+                      item.outcome === 'needs_decision'
+                        ? 'Serve una scelta'
+                        : item.outcome === 'delegation_candidate'
+                          ? 'Candidata per Jarvis'
+                          : 'Rinviata';
+                    return <li key={`${item.title}-${item.reason}`}>{label}: {item.title}</li>;
+                  })}
+                </ul>
               </div>
             )}
             <DayCalendar

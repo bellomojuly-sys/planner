@@ -69,6 +69,12 @@ export interface ReplanOptions {
   syncErrors?: string[];
 }
 
+export interface CalendarBlockMove {
+  blockId: string;
+  start: number;
+  end: number;
+}
+
 /**
  * Recomputes the plan from now to the horizon and reconciles it with what is
  * already on the calendar.
@@ -946,6 +952,125 @@ export async function moveBlock(
   }
 
   return diff;
+}
+
+/**
+ * Applies Google Calendar drags as one atomic planning gesture. The moved
+ * blocks are pinned only for this cascade, exactly like a drag in Planner;
+ * only an explicit "non spostare" remains permanent.
+ */
+export async function applyPlannerCalendarMoves(
+  env: Env,
+  db: DB,
+  userId: string,
+  rawMoves: CalendarBlockMove[],
+): Promise<PlanDiff | null> {
+  const moves = [...new Map(rawMoves.map((move) => [move.blockId, move])).values()];
+  if (moves.length === 0) return null;
+
+  const plannerCalendarId = await getPlannerCalendarId(db, userId);
+  const movedById = new Map(moves.map((move) => [move.blockId, move]));
+  const handledTasks = new Set<string>();
+  const temporaryTaskIds = new Set<string>();
+  const temporaryStandaloneIds = new Set<string>();
+
+  for (const move of moves) {
+    const block = await db.query.scheduledBlocks.findFirst({
+      where: and(
+        eq(scheduledBlocks.id, move.blockId),
+        eq(scheduledBlocks.userId, userId),
+      ),
+    });
+    if (!block) continue;
+
+    if (!block.taskId) {
+      await db
+        .update(scheduledBlocks)
+        .set({
+          startAt: move.start,
+          endAt: move.end,
+          pinned: true,
+          syncState: 'pending',
+        })
+        .where(eq(scheduledBlocks.id, block.id));
+      temporaryStandaloneIds.add(block.id);
+      await enqueueCalendarUpsert(
+        db,
+        userId,
+        block.id,
+        block.calendarId ?? plannerCalendarId,
+      );
+      continue;
+    }
+
+    if (handledTasks.has(block.taskId)) continue;
+    handledTasks.add(block.taskId);
+
+    const task = await db.query.tasks.findFirst({
+      where: and(eq(tasks.id, block.taskId), eq(tasks.userId, userId)),
+    });
+    if (!task) continue;
+
+    const siblings = await db
+      .select()
+      .from(scheduledBlocks)
+      .where(
+        and(
+          eq(scheduledBlocks.userId, userId),
+          eq(scheduledBlocks.taskId, block.taskId),
+        ),
+      );
+    const delta = move.start - block.startAt;
+    let earliest = Number.POSITIVE_INFINITY;
+
+    for (const part of siblings) {
+      const explicit = movedById.get(part.id);
+      const startAt = explicit?.start ?? part.startAt + delta;
+      const endAt = explicit?.end ?? part.endAt + delta;
+      earliest = Math.min(earliest, startAt);
+      await db
+        .update(scheduledBlocks)
+        .set({ startAt, endAt, pinned: true, syncState: 'pending' })
+        .where(eq(scheduledBlocks.id, part.id));
+      await enqueueCalendarUpsert(
+        db,
+        userId,
+        part.id,
+        part.calendarId ?? plannerCalendarId,
+      );
+    }
+
+    await db
+      .update(tasks)
+      .set({ pinned: true, earliestStartAt: earliest })
+      .where(and(eq(tasks.id, block.taskId), eq(tasks.userId, userId)));
+    if (!task.pinned) temporaryTaskIds.add(block.taskId);
+  }
+
+  if (handledTasks.size === 0 && temporaryStandaloneIds.size === 0) return null;
+
+  try {
+    return await replan(env, db, userId, 'task_moved', { confirmed: true });
+  } finally {
+    for (const taskId of temporaryTaskIds) {
+      await db
+        .update(scheduledBlocks)
+        .set({ pinned: false })
+        .where(
+          and(eq(scheduledBlocks.userId, userId), eq(scheduledBlocks.taskId, taskId)),
+        );
+      await db
+        .update(tasks)
+        .set({ pinned: false })
+        .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)));
+    }
+    for (const blockId of temporaryStandaloneIds) {
+      await db
+        .update(scheduledBlocks)
+        .set({ pinned: false })
+        .where(and(eq(scheduledBlocks.id, blockId), eq(scheduledBlocks.userId, userId)));
+    }
+  }
 }
 
 /** Releases a manual placement so the scheduler may optimise it again. */

@@ -5,7 +5,7 @@ import { getDb } from '../db/client';
 import { users, jobRuns, settings as settingsTable } from '../db/schema';
 import { syncNotion, syncCalendars } from '../services/sync';
 import { drainOutbox } from '../services/outbox';
-import { replan } from '../services/planner';
+import { applyPlannerCalendarMoves, replan } from '../services/planner';
 import { runMorningBriefing, runEveningReview, resolveReviewTime } from './daily';
 import { atLocalMinutes, localDateKey, MINUTE_MS } from '../lib/time';
 import { toPlannerError } from '../lib/errors';
@@ -63,6 +63,13 @@ export async function handleScheduled(env: Env): Promise<void> {
       //    both pulls succeed, only replan if something actually moved.
       if (errors.length > 0) {
         await replan(env, db, user.id, 'cron', { syncErrors: errors });
+      } else if (calendarReport.plannerMoves.length > 0) {
+        await applyPlannerCalendarMoves(
+          env,
+          db,
+          user.id,
+          calendarReport.plannerMoves,
+        );
       } else if (notionReport.changed || calendarReport.changed) {
         const trigger = calendarReport.changed ? 'calendar_change' : 'cron';
         await replan(env, db, user.id, trigger);

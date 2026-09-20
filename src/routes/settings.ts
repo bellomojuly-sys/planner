@@ -14,7 +14,7 @@ import {
 import * as notion from '../integrations/notion';
 import { checkIntegrations } from '../services/integration-check';
 import { sealJson } from '../crypto/encryption';
-import { replan } from '../services/planner';
+import { applyPlannerCalendarMoves, replan } from '../services/planner';
 import { syncNotion, syncCalendars } from '../services/sync';
 import {
   discoverCalendarSources,
@@ -261,9 +261,13 @@ settingsRoutes.post('/google/calendars/add', requireAuth('full'), async (c) => {
   const calendar = await addGoogleCalendarById(c.env, db, userId, body);
 
   const sync = await syncCalendars(c.env, db, userId);
-  const diff = await replan(c.env, db, userId, 'calendar_change', {
-    syncErrors: sync.errors,
-  });
+  const diff = sync.errors.length
+    ? await replan(c.env, db, userId, 'calendar_change', {
+        syncErrors: sync.errors,
+      })
+    : sync.plannerMoves.length
+      ? await applyPlannerCalendarMoves(c.env, db, userId, sync.plannerMoves)
+      : await replan(c.env, db, userId, 'calendar_change');
   await drainOutbox(c.env, db);
 
   return c.json({ ok: true, calendar: redactSource(calendar), sync, diff });
@@ -283,9 +287,13 @@ settingsRoutes.post('/calendars/ics', requireAuth('full'), async (c) => {
   const calendar = await addIcsSource(db, userId, body);
 
   const sync = await syncCalendars(c.env, db, userId);
-  const diff = await replan(c.env, db, userId, 'calendar_change', {
-    syncErrors: sync.errors,
-  });
+  const diff = sync.errors.length
+    ? await replan(c.env, db, userId, 'calendar_change', {
+        syncErrors: sync.errors,
+      })
+    : sync.plannerMoves.length
+      ? await applyPlannerCalendarMoves(c.env, db, userId, sync.plannerMoves)
+      : await replan(c.env, db, userId, 'calendar_change');
   await drainOutbox(c.env, db);
 
   return c.json({ ok: true, calendar: redactSource(calendar), sync, diff });
@@ -323,9 +331,13 @@ settingsRoutes.patch('/google/calendars/:id', requireAuth('full'), async (c) => 
   let diff = null;
   if (body.role !== undefined || body.enabled !== undefined) {
     sync = await syncCalendars(c.env, db, userId);
-    diff = await replan(c.env, db, userId, 'calendar_change', {
-      syncErrors: sync.errors,
-    });
+    diff = sync.errors.length
+      ? await replan(c.env, db, userId, 'calendar_change', {
+          syncErrors: sync.errors,
+        })
+      : sync.plannerMoves.length
+        ? await applyPlannerCalendarMoves(c.env, db, userId, sync.plannerMoves)
+        : await replan(c.env, db, userId, 'calendar_change');
   }
 
   await drainOutbox(c.env, db);
@@ -348,9 +360,18 @@ settingsRoutes.post('/sync', requireAuth('full'), async (c) => {
 
   const errors = [...notionReport.errors, ...calendarReport.errors];
   const diff =
-    errors.length > 0 || notionReport.changed || calendarReport.changed
+    errors.length > 0
       ? await replan(c.env, db, userId, 'manual', { syncErrors: errors })
-      : null;
+      : calendarReport.plannerMoves.length > 0
+        ? await applyPlannerCalendarMoves(
+            c.env,
+            db,
+            userId,
+            calendarReport.plannerMoves,
+          )
+        : notionReport.changed || calendarReport.changed
+          ? await replan(c.env, db, userId, 'manual')
+          : null;
 
   await drainOutbox(c.env, db);
 

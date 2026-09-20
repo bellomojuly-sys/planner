@@ -88,7 +88,9 @@ describe('calendar event classification', () => {
   });
 
   it('shows context, transparent and all-day events without blocking time', () => {
-    expect(classifyEvent(event(), [], 'context').kind).toBe('soft');
+    expect(classifyEvent(event({ title: 'Zelf Work' }), [], 'context').kind).toBe(
+      'soft',
+    );
     expect(classifyEvent(event({ transparent: true }), [], 'busy').kind).toBe(
       'soft',
     );
