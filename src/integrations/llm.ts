@@ -222,6 +222,7 @@ ${context.shoppingItems.map((i) => `  - ${i}`).join('\n') || '  (nessuno)'}
 COME INTERPRETARE
 - Una frase può contenere più azioni: restituiscile tutte, nell'ordine in cui sono state dette.
 - "ho finito X", "fatto X", "X è a posto", "I finished X", "X is done" → complete_task. Se dice quanto ci ha messo, compila actualMinutes.
+- "ho completato quest'azione", "ho finito questa attività", "I completed this task" → complete_task. Conserva il riferimento generico in taskQuery: il sistema lo risolve in modo deterministico dall'unica attività in corso. Non scegliere un titolo dall'elenco.
 - "sposta X a domani", "X lo faccio giovedì", "move X to tomorrow" → move_task.
 - "non spostare X", "X deve restare qui" → set_task_pin con pinned true.
 - "puoi spostare di nuovo X", "sblocca X" → set_task_pin con pinned false.

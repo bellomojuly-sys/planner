@@ -1,4 +1,4 @@
-import { and, eq, ne, desc } from 'drizzle-orm';
+import { and, eq, ne, desc, gt, lte } from 'drizzle-orm';
 import type { DB } from '../db/client';
 import {
   tasks,
@@ -381,13 +381,21 @@ async function completeTask(
   intent: Extract<Intent, { kind: 'complete_task' }>,
   language: CaptureLanguage,
 ): Promise<IntentOutcome> {
-  const task = await findTask(db, userId, intent.taskQuery);
+  const contextual = isContextualCompletionReference(intent.taskQuery);
+  const task = contextual
+    ? await findActiveTask(db, userId, Date.now())
+    : await findTask(db, userId, intent.taskQuery);
   if (!task) {
+    const userMessage = contextual
+      ? language === 'en'
+        ? 'There is not exactly one task in progress right now. Say its name so I do not complete the wrong one.'
+        : 'Non c’è un’unica attività in corso in questo momento. Dimmi il nome, così non completo quella sbagliata.'
+      : language === 'en'
+        ? `I could not find a task matching "${intent.taskQuery}".`
+        : `Non ho trovato un'attività che assomigli a "${intent.taskQuery}".`;
+
     throw new PlannerError('not_found', {
-      userMessage:
-        language === 'en'
-          ? `I could not find a task matching "${intent.taskQuery}".`
-          : `Non ho trovato un'attività che assomigli a "${intent.taskQuery}".`,
+      userMessage,
     });
   }
 
@@ -409,6 +417,109 @@ async function completeTask(
           : `Completata "${task.title}"`,
     trigger: 'dependency_cascade',
   };
+}
+
+/**
+ * Generic references are resolved from the live plan, never guessed from the
+ * most recently edited task. The list is deliberately narrow because a wrong
+ * completion is more damaging than asking Giulia to name the task.
+ */
+export function isContextualCompletionReference(query: string): boolean {
+  const normalized = query
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[’']/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return new Set([
+    'questa azione',
+    'quest azione',
+    'questa attivita',
+    'quest attivita',
+    'questa attivita in corso',
+    'azione corrente',
+    'l azione corrente',
+    'attivita corrente',
+    'l attivita corrente',
+    'questo task',
+    'il task corrente',
+    'quello che sto facendo',
+    'cio che sto facendo',
+    'this action',
+    'this task',
+    'the current action',
+    'the current task',
+    'what i am doing',
+    'what im doing',
+  ]).has(normalized);
+}
+
+export function selectSingleActiveTaskId(
+  blocks: Array<{
+    taskId: string | null;
+    kind: string;
+    startAt: number;
+    endAt: number;
+  }>,
+  now: number,
+): string | null {
+  const activeTaskIds = new Set(
+    blocks
+      .filter(
+        (block) =>
+          block.kind === 'task' &&
+          block.taskId &&
+          block.startAt <= now &&
+          block.endAt > now,
+      )
+      .map((block) => block.taskId as string),
+  );
+
+  return activeTaskIds.size === 1 ? [...activeTaskIds][0]! : null;
+}
+
+async function findActiveTask(
+  db: DB,
+  userId: string,
+  now: number,
+): Promise<Task | null> {
+  const activeBlocks = await db
+    .select({
+      taskId: scheduledBlocks.taskId,
+      kind: scheduledBlocks.kind,
+      startAt: scheduledBlocks.startAt,
+      endAt: scheduledBlocks.endAt,
+    })
+    .from(scheduledBlocks)
+    .where(
+      and(
+        eq(scheduledBlocks.userId, userId),
+        eq(scheduledBlocks.kind, 'task'),
+        lte(scheduledBlocks.startAt, now),
+        gt(scheduledBlocks.endAt, now),
+      ),
+    );
+
+  const taskId = selectSingleActiveTaskId(activeBlocks, now);
+  if (!taskId) return null;
+
+  const [task] = await db
+    .select()
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.userId, userId),
+        eq(tasks.id, taskId),
+        ne(tasks.status, 'done'),
+        ne(tasks.status, 'cancelled'),
+      ),
+    )
+    .limit(1);
+
+  return task ?? null;
 }
 
 async function moveTask(
