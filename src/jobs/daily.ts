@@ -104,6 +104,69 @@ export function englishAgendaTitle(title: string): string {
   return cleanTitle;
 }
 
+const SMALL_ENGLISH_NUMBERS = [
+  'zero',
+  'one',
+  'two',
+  'three',
+  'four',
+  'five',
+  'six',
+  'seven',
+  'eight',
+  'nine',
+  'ten',
+  'eleven',
+  'twelve',
+  'thirteen',
+  'fourteen',
+  'fifteen',
+  'sixteen',
+  'seventeen',
+  'eighteen',
+  'nineteen',
+] as const;
+
+function englishNumber(value: number): string {
+  if (value < 20) return SMALL_ENGLISH_NUMBERS[value] ?? String(value);
+  const tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty'];
+  const remainder = value % 10;
+  return remainder === 0
+    ? (tens[Math.floor(value / 10)] ?? String(value))
+    : `${tens[Math.floor(value / 10)]}-${SMALL_ENGLISH_NUMBERS[remainder]}`;
+}
+
+/**
+ * Spell times as English words so a Shortcut with an Italian default voice
+ * cannot reinterpret numeric clock notation in Italian.
+ */
+export function formatEnglishSpokenTime(timestamp: number, timezone: string): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: timezone,
+  }).formatToParts(timestamp);
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? 0);
+  const localHour = Number(
+    new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit',
+      hourCycle: 'h23',
+      timeZone: timezone,
+    }).format(timestamp),
+  );
+  const period =
+    localHour < 12
+      ? 'in the morning'
+      : localHour < 18
+        ? 'in the afternoon'
+        : 'in the evening';
+  const minuteWords =
+    minute === 0 ? '' : minute < 10 ? ` oh ${englishNumber(minute)}` : ` ${englishNumber(minute)}`;
+  return `${englishNumber(hour)}${minuteWords} ${period}`;
+}
+
 export async function loadAgenda(
   db: DB,
   userId: string,
@@ -261,7 +324,7 @@ export function renderVoiceAgenda(
       return `${english ? 'now' : 'adesso'}, ${item.title}`;
     }
     if (english) {
-      return `${formatTime(item.start, timezone, locale).replace(/^0/, '')}, ${item.title}`;
+      return `${formatEnglishSpokenTime(item.start, timezone)}, ${item.title}`;
     }
     return `alle ${formatTime(item.start, timezone, locale)}, ${item.title}`;
   });

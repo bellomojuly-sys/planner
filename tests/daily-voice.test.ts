@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { englishAgendaTitle, renderVoiceAgenda, type DayAgenda } from '../src/jobs/daily';
+import {
+  englishAgendaTitle,
+  formatEnglishSpokenTime,
+  renderVoiceAgenda,
+  type DayAgenda,
+} from '../src/jobs/daily';
 
 const TZ = 'Europe/Rome';
 const NOW = Date.parse('2026-08-12T10:00:00Z'); // 12:00 in Rome
@@ -142,7 +147,7 @@ describe('Siri daily agenda', () => {
     );
 
     expect(result).toBe(
-      'Plan for Thursday, August 13: 9:00 AM, Prepare the project.',
+      'Plan for Thursday, August 13: nine in the morning, Prepare the project.',
     );
   });
 
@@ -164,7 +169,18 @@ describe('Siri daily agenda', () => {
       'en',
     );
 
-    expect(result).toBe('Today: 9:30 PM, Register for health insurance.');
+    expect(result).toBe(
+      'Today: nine thirty in the evening, Register for health insurance.',
+    );
+  });
+
+  it('spells English times so iPhone does not read digits with Italian rules', () => {
+    expect(formatEnglishSpokenTime(Date.parse('2026-08-12T04:05:00Z'), TZ)).toBe(
+      'six oh five in the morning',
+    );
+    expect(formatEnglishSpokenTime(Date.parse('2026-08-12T11:15:00Z'), TZ)).toBe(
+      'one fifteen in the afternoon',
+    );
   });
 
   it('translates generated travel labels without changing proper names', () => {
