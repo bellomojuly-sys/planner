@@ -55,4 +55,24 @@ describe('Voice intent contract', () => {
 
     expect(parsed.success).toBe(false);
   });
+
+  it('accepts an English agenda question and preserves its language', () => {
+    const parsed = validateInterpretation({
+      language: 'en',
+      summary: "I’ll show you Monday’s plan.",
+      intents: [
+        {
+          kind: 'question',
+          question: 'What do I have to do on Monday?',
+          date: '2026-09-21',
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.language).toBe('en');
+      expect(parsed.data.intents[0]).toMatchObject({ date: '2026-09-21' });
+    }
+  });
 });

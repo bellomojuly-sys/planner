@@ -120,4 +120,35 @@ describe('Siri daily agenda', () => {
       'Piano di giovedì 13 agosto: alle 09:00, Preparare il progetto.',
     );
   });
+
+  it('speaks the requested future day in English', () => {
+    const result = renderVoiceAgenda(
+      agenda({
+        dateKey: '2026-08-13',
+        dayLabel: 'giovedì 13 agosto',
+        blocks: [
+          {
+            title: 'Prepare the project',
+            start: Date.parse('2026-08-13T07:00:00Z'),
+            end: Date.parse('2026-08-13T08:00:00Z'),
+            kind: 'task',
+            taskId: 'project',
+          },
+        ],
+      }),
+      TZ,
+      NOW,
+      'en',
+    );
+
+    expect(result).toBe(
+      'Plan for Thursday 13 August: at 09:00, Prepare the project.',
+    );
+  });
+
+  it('uses an English empty-day response', () => {
+    expect(renderVoiceAgenda(agenda(), TZ, NOW, 'en')).toBe(
+      'You have nothing else scheduled today.',
+    );
+  });
 });

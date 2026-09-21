@@ -14,14 +14,22 @@ export const captureRoutes = new Hono<AppBindings>();
  * action reached D1. Mixed utterances report both the success and the failure.
  */
 export function renderCaptureOutcome(
-  result: Pick<CaptureResult, 'summary' | 'applied' | 'skipped'>,
+  result: Pick<CaptureResult, 'summary' | 'applied' | 'skipped'> &
+    Partial<Pick<CaptureResult, 'language'>>,
 ): string {
   const applied = result.applied.join('. ');
   const skipped = result.skipped.join('. ');
+  const english = result.language === 'en';
 
-  if (applied && skipped) return `${applied}. Non applicato: ${skipped}`;
+  if (applied && skipped) {
+    return `${applied}. ${english ? 'Not applied' : 'Non applicato'}: ${skipped}`;
+  }
   if (applied) return applied;
-  if (skipped) return `Non ho salvato la richiesta: ${skipped}`;
+  if (skipped) {
+    return english
+      ? `I did not save the request: ${skipped}`
+      : `Non ho salvato la richiesta: ${skipped}`;
+  }
   return result.summary;
 }
 
@@ -61,7 +69,12 @@ captureRoutes.post('/', requireAuth('capture'), async (c) => {
       c.env.APP_TIMEZONE,
       agendaAnchor(result.answerDate),
     );
-    const agendaSpeech = renderVoiceAgenda(agenda, c.env.APP_TIMEZONE);
+    const agendaSpeech = renderVoiceAgenda(
+      agenda,
+      c.env.APP_TIMEZONE,
+      Date.now(),
+      result.language,
+    );
     const changed = result.applied.length > 0 || result.skipped.length > 0;
     spoken = changed ? `${renderCaptureOutcome(result)}. ${agendaSpeech}` : agendaSpeech;
   }
@@ -78,6 +91,7 @@ captureRoutes.post('/', requireAuth('capture'), async (c) => {
     skipped: result.skipped,
     replanned: result.replanned,
     captureId: result.captureId,
+    language: result.language,
   });
 });
 
@@ -107,7 +121,15 @@ captureRoutes.post('/text', requireAuth('capture'), async (c) => {
     );
     const changed = result.applied.length > 0 || result.skipped.length > 0;
     const outcome = changed ? `${renderCaptureOutcome(result)}. ` : '';
-    return c.text(outcome + renderVoiceAgenda(agenda, c.env.APP_TIMEZONE));
+    return c.text(
+      outcome +
+        renderVoiceAgenda(
+          agenda,
+          c.env.APP_TIMEZONE,
+          Date.now(),
+          result.language,
+        ),
+    );
   }
 
   return c.text(renderCaptureOutcome(result));

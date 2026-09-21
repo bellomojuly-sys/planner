@@ -15,6 +15,11 @@ describe('voice capture response', () => {
     expect(spokenArea('errand')).toBe('commissioni');
   });
 
+  it('speaks the inferred area with an English label', () => {
+    expect(spokenArea('university', 'en')).toBe('university');
+    expect(spokenArea('errand', 'en')).toBe('errands');
+  });
+
   it('confirms only an action that was actually applied', () => {
     expect(
       renderCaptureOutcome({
@@ -53,5 +58,25 @@ describe('voice capture response', () => {
         skipped: [],
       }),
     ).toBe('Ti mostro il piano di oggi.');
+  });
+
+  it('reports successful and failed English actions in English', () => {
+    expect(
+      renderCaptureOutcome({
+        language: 'en',
+        summary: 'I will add the task.',
+        applied: ['Added "Call Mario"'],
+        skipped: ['I could not find "Report".'],
+      }),
+    ).toBe('Added "Call Mario". Not applied: I could not find "Report".');
+
+    expect(
+      renderCaptureOutcome({
+        language: 'en',
+        summary: 'I will add the task.',
+        applied: [],
+        skipped: ['Unexpected error. Try again.'],
+      }),
+    ).toBe('I did not save the request: Unexpected error. Try again.');
   });
 });

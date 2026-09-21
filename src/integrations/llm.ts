@@ -5,7 +5,7 @@ import { AREAS, ENERGY } from '../db/schema';
 import type { Env } from '../env';
 
 /**
- * Turns a spoken Italian sentence into structured intents, and writes the
+ * Turns a spoken Italian or English sentence into structured intents, and writes the
  * daily briefing. Backed by DeepSeek through its OpenAI-format HTTP API.
  *
  * Thinking is disabled: these utterances are short and the schema is tight,
@@ -95,7 +95,9 @@ export type Intent = z.infer<typeof IntentSchema>;
 
 const ResponseSchema = z.object({
   intents: z.array(IntentSchema),
-  /** One short Italian line confirming what was understood. */
+  /** Language detected from Giulia's utterance. */
+  language: z.enum(['it', 'en']).default('it'),
+  /** One short line, in the detected language, confirming what was understood. */
   summary: z.string(),
 });
 
@@ -113,12 +115,17 @@ export function validateInterpretation(value: unknown) {
 const JSON_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['intents', 'summary'],
+  required: ['intents', 'language', 'summary'],
   properties: {
+    language: {
+      type: 'string',
+      enum: ['it', 'en'],
+      description: 'Lingua della richiesta: it per italiano, en per inglese.',
+    },
     summary: {
       type: 'string',
       description:
-        'Una frase breve in italiano che conferma cosa è stato capito.',
+        'Una frase breve nella lingua della richiesta che conferma cosa è stato capito.',
     },
     intents: {
       type: 'array',
@@ -197,7 +204,12 @@ const JSON_SCHEMA = {
 // ---------------------------------------------------------------------------
 
 function buildSystemPrompt(context: InterpretContext): string {
-  return `Sei l'assistente di pianificazione personale di Giulia. Interpreti frasi dettate a voce in italiano e le trasformi in azioni strutturate.
+  return `Sei l'assistente di pianificazione personale di Giulia. Interpreti frasi dettate a voce in italiano o inglese e le trasformi in azioni strutturate.
+
+LINGUA
+- Riconosci se la richiesta è in italiano o inglese e compila language con it o en.
+- Scrivi summary e reason nella stessa lingua usata da Giulia.
+- I titoli e i riferimenti alle attività conservano le parole usate da Giulia.
 
 CONTESTO
 - Oggi è ${context.todayIso} (${context.weekdayName}), fuso orario Europe/Rome.
@@ -209,16 +221,16 @@ ${context.shoppingItems.map((i) => `  - ${i}`).join('\n') || '  (nessuno)'}
 
 COME INTERPRETARE
 - Una frase può contenere più azioni: restituiscile tutte, nell'ordine in cui sono state dette.
-- "ho finito X", "fatto X", "X è a posto" → complete_task. Se dice quanto ci ha messo ("ci ho messo un'ora"), compila actualMinutes.
-- "sposta X a domani", "X lo faccio giovedì" → move_task.
+- "ho finito X", "fatto X", "X è a posto", "I finished X", "X is done" → complete_task. Se dice quanto ci ha messo, compila actualMinutes.
+- "sposta X a domani", "X lo faccio giovedì", "move X to tomorrow" → move_task.
 - "non spostare X", "X deve restare qui" → set_task_pin con pinned true.
 - "puoi spostare di nuovo X", "sblocca X" → set_task_pin con pinned false.
 - "prima di X devo fare Y", "X dipende da Y" → add_dependency.
-- "compra X", "finito il latte", "serve X" → add_shopping_item.
+- "compra X", "finito il latte", "serve X", "buy X", "add X to my shopping list" → add_shopping_item.
 - "preso il pane", "comprato X" → complete_shopping_item.
 - Tutto il resto che descrive qualcosa da fare → create_task.
-- Se la frase è una domanda sul piano ("cosa devo fare oggi?", "cosa devo fare lunedì?") → question. Compila sempre date con il giorno richiesto in formato YYYY-MM-DD; se non viene detto un giorno, usa oggi.
-- Se davvero non è chiaro cosa intende, usa unclear e spiega perché in italiano.
+- Se la frase è una domanda sul piano ("cosa devo fare oggi?", "cosa devo fare lunedì?", "what do I have to do today?", "what is my plan for Monday?") → question. Compila sempre date con il giorno richiesto in formato YYYY-MM-DD; se non viene detto un giorno, usa oggi.
+- Se davvero non è chiaro cosa intende, usa unclear e spiega perché nella lingua della richiesta.
 
 STIME
 Per ogni create_task stima sempre area, energy, priority, estimatedMinutes e flexibility. Quando il testo lo permette estrai anche location, travelMinutes, preparationMinutes e recoveryMinutes.
@@ -231,7 +243,7 @@ Per ogni create_task stima sempre area, energy, priority, estimatedMinutes e fle
 - travelMinutes è il viaggio di andata. preparationMinutes include preparazione necessaria prima; recoveryMinutes include doccia, cambio o decompressione dopo.
 
 DATE
-Risolvi sempre i riferimenti relativi in date ISO usando la data di oggi. "domani", "venerdì", "fine mese" diventano YYYY-MM-DD.
+Risolvi sempre i riferimenti relativi in date ISO usando la data di oggi. "domani", "venerdì", "fine mese", "tomorrow", "Friday", "end of the month" diventano YYYY-MM-DD.
 
 Non inventare attività che Giulia non ha nominato. Se cita un'attività esistente, riporta in taskQuery le sue parole, non una tua riformulazione.
 
@@ -240,7 +252,10 @@ Rispondi solo con un oggetto json valido che rispetta questo JSON Schema. Per og
 ${JSON.stringify(JSON_SCHEMA)}
 
 Esempio per "ho finito la fattura e compra il latte":
-{"summary":"Segno la fattura come fatta e aggiungo il latte alla spesa.","intents":[{"kind":"complete_task","taskQuery":"la fattura"},{"kind":"add_shopping_item","name":"latte","category":"alimentari"}]}`;
+{"language":"it","summary":"Segno la fattura come fatta e aggiungo il latte alla spesa.","intents":[{"kind":"complete_task","taskQuery":"la fattura"},{"kind":"add_shopping_item","name":"latte","category":"alimentari"}]}
+
+Esempio per "what is my plan for today?":
+{"language":"en","summary":"I’ll show you today’s plan.","intents":[{"kind":"question","question":"What is my plan for today?","date":"${context.todayIso}"}]}`;
 }
 
 export interface InterpretContext {

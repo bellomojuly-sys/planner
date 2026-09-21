@@ -10,7 +10,12 @@ import {
   outbox,
   type Task,
 } from '../db/schema';
-import { interpretUtterance, type Intent } from '../integrations/llm';
+import {
+  interpretUtterance,
+  validateInterpretation,
+  type Intent,
+  type Interpretation,
+} from '../integrations/llm';
 import { applyLearning } from '../scheduler/estimate';
 import { replan, type RescheduleTrigger } from './planner';
 import {
@@ -24,6 +29,7 @@ import type { Env } from '../env';
 
 export interface CaptureResult {
   captureId: string;
+  language: CaptureLanguage;
   summary: string;
   applied: string[];
   skipped: string[];
@@ -32,6 +38,8 @@ export interface CaptureResult {
   answerDate?: string;
   replanned: boolean;
 }
+
+export type CaptureLanguage = Interpretation['language'];
 
 /**
  * The voice pipeline: interpret → apply → reschedule.
@@ -62,8 +70,12 @@ export async function handleCapture(
       ),
     });
     if (prior) {
+      const priorInterpretation = validateInterpretation(prior.interpretation);
       return {
         captureId: prior.id,
+        language: priorInterpretation.success
+          ? priorInterpretation.data.language
+          : 'it',
         summary: prior.appliedSummary ?? 'Già registrato.',
         applied: [],
         skipped: [],
@@ -104,7 +116,14 @@ export async function handleCapture(
 
     for (const intent of interpretation.intents) {
       try {
-        const outcome = await applyIntent(env, db, userId, intent, timezone);
+        const outcome = await applyIntent(
+          env,
+          db,
+          userId,
+          intent,
+          timezone,
+          interpretation.language,
+        );
         if (outcome.message) applied.push(outcome.message);
         if (outcome.answer) answer = outcome.answer;
         if (outcome.answerDate) answerDate = outcome.answerDate;
@@ -134,7 +153,16 @@ export async function handleCapture(
       })
       .where(eq(captures.id, captureId));
 
-    return { captureId, summary, applied, skipped, answer, answerDate, replanned };
+    return {
+      captureId,
+      language: interpretation.language,
+      summary,
+      applied,
+      skipped,
+      answer,
+      answerDate,
+      replanned,
+    };
   } catch (err) {
     const pe = toPlannerError(err);
     await db
@@ -183,27 +211,31 @@ async function applyIntent(
   userId: string,
   intent: Intent,
   timezone: string,
+  language: CaptureLanguage,
 ): Promise<IntentOutcome> {
   switch (intent.kind) {
     case 'create_task':
-      return createTask(env, db, userId, intent);
+      return createTask(env, db, userId, intent, language);
     case 'complete_task':
-      return completeTask(env, db, userId, intent);
+      return completeTask(env, db, userId, intent, language);
     case 'move_task':
-      return moveTask(db, userId, intent, timezone);
+      return moveTask(db, userId, intent, timezone, language);
     case 'set_task_pin':
-      return setTaskPin(db, userId, intent);
+      return setTaskPin(db, userId, intent, language);
     case 'add_dependency':
-      return addDependency(db, userId, intent);
+      return addDependency(db, userId, intent, language);
     case 'add_shopping_item':
-      return addShoppingItem(db, userId, intent);
+      return addShoppingItem(db, userId, intent, language);
     case 'complete_shopping_item':
-      return completeShoppingItem(db, userId, intent);
+      return completeShoppingItem(db, userId, intent, language);
     case 'question':
       return { answer: intent.question, answerDate: intent.date };
     case 'unclear':
       throw new PlannerError('bad_request', {
-        userMessage: `Non ho capito: ${intent.reason}`,
+        userMessage:
+          language === 'en'
+            ? `I did not understand: ${intent.reason}`
+            : `Non ho capito: ${intent.reason}`,
       });
   }
 }
@@ -213,6 +245,7 @@ async function createTask(
   db: DB,
   userId: string,
   intent: Extract<Intent, { kind: 'create_task' }>,
+  language: CaptureLanguage,
 ): Promise<IntentOutcome> {
   const area = intent.area ?? 'general';
   const energy = intent.energy ?? 'medium';
@@ -281,14 +314,20 @@ async function createTask(
   }
 
   return {
-    message: `Aggiunta "${created!.title}", area ${spokenArea(area)} (${learned.plannedMinutes} min)`,
+    message:
+      language === 'en'
+        ? `Added "${created!.title}", area ${spokenArea(area, language)} (${learned.plannedMinutes} min)`
+        : `Aggiunta "${created!.title}", area ${spokenArea(area, language)} (${learned.plannedMinutes} min)`,
     trigger: intent.urgent || (intent.priority ?? 3) === 1 ? 'urgent_task' : 'capture',
   };
 }
 
 /** Human labels used in the short spoken confirmation returned to the Shortcut. */
-export function spokenArea(area: string): string {
-  const labels: Record<string, string> = {
+export function spokenArea(
+  area: string,
+  language: CaptureLanguage = 'it',
+): string {
+  const italian: Record<string, string> = {
     general: 'generale',
     mg: 'MG',
     university: 'università',
@@ -298,7 +337,17 @@ export function spokenArea(area: string): string {
     health: 'salute',
     errand: 'commissioni',
   };
-  return labels[area] ?? area;
+  const english: Record<string, string> = {
+    general: 'general',
+    mg: 'MG',
+    university: 'university',
+    heemia: 'Heemia',
+    career: 'career',
+    personal: 'personal',
+    health: 'health',
+    errand: 'errands',
+  };
+  return (language === 'en' ? english : italian)[area] ?? area;
 }
 
 /**
@@ -330,11 +379,15 @@ async function completeTask(
   db: DB,
   userId: string,
   intent: Extract<Intent, { kind: 'complete_task' }>,
+  language: CaptureLanguage,
 ): Promise<IntentOutcome> {
   const task = await findTask(db, userId, intent.taskQuery);
   if (!task) {
     throw new PlannerError('not_found', {
-      userMessage: `Non ho trovato un'attività che assomigli a "${intent.taskQuery}".`,
+      userMessage:
+        language === 'en'
+          ? `I could not find a task matching "${intent.taskQuery}".`
+          : `Non ho trovato un'attività che assomigli a "${intent.taskQuery}".`,
     });
   }
 
@@ -346,9 +399,14 @@ async function completeTask(
   await completeTaskLocally(db, userId, task, actual);
 
   return {
-    message: actual
-      ? `Completata "${task.title}" (${actual} min reali)`
-      : `Completata "${task.title}"`,
+    message:
+      language === 'en'
+        ? actual
+          ? `Completed "${task.title}" (${actual} actual min)`
+          : `Completed "${task.title}"`
+        : actual
+          ? `Completata "${task.title}" (${actual} min reali)`
+          : `Completata "${task.title}"`,
     trigger: 'dependency_cascade',
   };
 }
@@ -358,11 +416,15 @@ async function moveTask(
   userId: string,
   intent: Extract<Intent, { kind: 'move_task' }>,
   timezone: string,
+  language: CaptureLanguage,
 ): Promise<IntentOutcome> {
   const task = await findTask(db, userId, intent.taskQuery);
   if (!task) {
     throw new PlannerError('not_found', {
-      userMessage: `Non ho trovato "${intent.taskQuery}".`,
+      userMessage:
+        language === 'en'
+          ? `I could not find "${intent.taskQuery}".`
+          : `Non ho trovato "${intent.taskQuery}".`,
     });
   }
 
@@ -372,7 +434,10 @@ async function moveTask(
 
   if (!earliest) {
     throw new PlannerError('bad_request', {
-      userMessage: `Non ho capito a quando spostare "${task.title}".`,
+      userMessage:
+        language === 'en'
+          ? `I could not understand when to move "${task.title}".`
+          : `Non ho capito a quando spostare "${task.title}".`,
     });
   }
 
@@ -386,7 +451,10 @@ async function moveTask(
   await db.delete(scheduledBlocks).where(eq(scheduledBlocks.taskId, task.id));
 
   return {
-    message: `Spostata "${task.title}" a ${formatDayLong(earliest, timezone)}`,
+    message:
+      language === 'en'
+        ? `Moved "${task.title}" to ${formatDayLong(earliest, timezone, 'en-GB')}`
+        : `Spostata "${task.title}" a ${formatDayLong(earliest, timezone)}`,
     trigger: 'task_moved',
   };
 }
@@ -395,11 +463,15 @@ async function setTaskPin(
   db: DB,
   userId: string,
   intent: Extract<Intent, { kind: 'set_task_pin' }>,
+  language: CaptureLanguage,
 ): Promise<IntentOutcome> {
   const task = await findTask(db, userId, intent.taskQuery);
   if (!task) {
     throw new PlannerError('not_found', {
-      userMessage: `Non ho trovato "${intent.taskQuery}".`,
+      userMessage:
+        language === 'en'
+          ? `I could not find "${intent.taskQuery}".`
+          : `Non ho trovato "${intent.taskQuery}".`,
     });
   }
 
@@ -411,7 +483,10 @@ async function setTaskPin(
     );
   if (intent.pinned && blocks.length === 0) {
     throw new PlannerError('bad_request', {
-      userMessage: `"${task.title}" non è ancora nel piano: prima scegli un orario.`,
+      userMessage:
+        language === 'en'
+          ? `"${task.title}" is not in the plan yet: choose a time first.`
+          : `"${task.title}" non è ancora nel piano: prima scegli un orario.`,
     });
   }
 
@@ -427,9 +502,14 @@ async function setTaskPin(
     );
 
   return {
-    message: intent.pinned
-      ? `"${task.title}" non verrà spostata automaticamente`
-      : `"${task.title}" può essere ripianificata di nuovo`,
+    message:
+      language === 'en'
+        ? intent.pinned
+          ? `"${task.title}" will not be moved automatically`
+          : `"${task.title}" can be planned again`
+        : intent.pinned
+          ? `"${task.title}" non verrà spostata automaticamente`
+          : `"${task.title}" può essere ripianificata di nuovo`,
   };
 }
 
@@ -437,6 +517,7 @@ async function addDependency(
   db: DB,
   userId: string,
   intent: Extract<Intent, { kind: 'add_dependency' }>,
+  language: CaptureLanguage,
 ): Promise<IntentOutcome> {
   const [task, dependsOn] = await Promise.all([
     findTask(db, userId, intent.taskQuery),
@@ -445,12 +526,18 @@ async function addDependency(
 
   if (!task || !dependsOn) {
     throw new PlannerError('not_found', {
-      userMessage: 'Non ho trovato entrambe le attività per creare la dipendenza.',
+      userMessage:
+        language === 'en'
+          ? 'I could not find both tasks to create the dependency.'
+          : 'Non ho trovato entrambe le attività per creare la dipendenza.',
     });
   }
   if (task.id === dependsOn.id) {
     throw new PlannerError('bad_request', {
-      userMessage: "Un'attività non può dipendere da sé stessa.",
+      userMessage:
+        language === 'en'
+          ? 'A task cannot depend on itself.'
+          : "Un'attività non può dipendere da sé stessa.",
     });
   }
 
@@ -460,7 +547,10 @@ async function addDependency(
     .onConflictDoNothing();
 
   return {
-    message: `"${task.title}" ora dipende da "${dependsOn.title}"`,
+    message:
+      language === 'en'
+        ? `"${task.title}" now depends on "${dependsOn.title}"`
+        : `"${task.title}" ora dipende da "${dependsOn.title}"`,
     trigger: 'dependency_cascade',
   };
 }
@@ -469,6 +559,7 @@ async function addShoppingItem(
   db: DB,
   userId: string,
   intent: Extract<Intent, { kind: 'add_shopping_item' }>,
+  language: CaptureLanguage,
 ): Promise<IntentOutcome> {
   const existing = await db.query.shoppingItems.findFirst({
     where: and(
@@ -484,7 +575,12 @@ async function addShoppingItem(
       .update(shoppingItems)
       .set({ quantity: existing.quantity + (intent.quantity ?? 1) })
       .where(eq(shoppingItems.id, existing.id));
-    return { message: `Aggiornata quantità di ${intent.name}` };
+    return {
+      message:
+        language === 'en'
+          ? `Updated the quantity of ${intent.name}`
+          : `Aggiornata quantità di ${intent.name}`,
+    };
   }
 
   await db.insert(shoppingItems).values({
@@ -497,13 +593,17 @@ async function addShoppingItem(
     urgent: intent.urgent ?? false,
   });
 
-  return { message: `In lista: ${intent.name}` };
+  return {
+    message:
+      language === 'en' ? `Added to the list: ${intent.name}` : `In lista: ${intent.name}`,
+  };
 }
 
 async function completeShoppingItem(
   db: DB,
   userId: string,
   intent: Extract<Intent, { kind: 'complete_shopping_item' }>,
+  language: CaptureLanguage,
 ): Promise<IntentOutcome> {
   const open = await db
     .select()
@@ -513,7 +613,10 @@ async function completeShoppingItem(
   const match = bestMatch(open, intent.itemQuery, (i) => i.name);
   if (!match) {
     throw new PlannerError('not_found', {
-      userMessage: `"${intent.itemQuery}" non è nella lista.`,
+      userMessage:
+        language === 'en'
+          ? `"${intent.itemQuery}" is not on the list.`
+          : `"${intent.itemQuery}" non è nella lista.`,
     });
   }
 
@@ -522,7 +625,9 @@ async function completeShoppingItem(
     .set({ status: 'bought', completedAt: Date.now() })
     .where(eq(shoppingItems.id, match.id));
 
-  return { message: `Preso: ${match.name}` };
+  return {
+    message: language === 'en' ? `Bought: ${match.name}` : `Preso: ${match.name}`,
+  };
 }
 
 // ---------------------------------------------------------------------------
