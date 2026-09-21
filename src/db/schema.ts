@@ -564,7 +564,9 @@ export const calendarEvents = sqliteTable(
     allDay: integer('all_day', { mode: 'boolean' }).notNull().default(false),
     /**
      * `fixed`   — immovable: restaurant shift, lesson, exam. Blocks time.
-     * `soft`    — occupies time but the scheduler may overlap light work.
+     * `soft`    — shown (dashed) but not busy: Google "free", all-day,
+     *             context calendars and university work contexts. Only the
+     *             latter shape planning, by admitting university work alone.
      * `planner` — written by us, mirroring a scheduled block.
      */
     kind: text('kind', { enum: ['fixed', 'soft', 'planner'] })

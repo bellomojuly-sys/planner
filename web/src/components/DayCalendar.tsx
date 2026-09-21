@@ -133,7 +133,7 @@ export function DayCalendar({
             >
               <span style={{ backgroundColor: event.color }} aria-hidden="true" />
               <strong>{event.title}</strong>
-              <small>{event.calendarName}</small>
+              <small>{event.calendarName} · non blocca</small>
             </div>
           ))}
         </div>
@@ -189,6 +189,7 @@ export function DayCalendar({
             <div className="block__title">
               {event.title}
               {event.isShift && <span className="block__badge">turno</span>}
+              {event.kind === 'soft' && <span className="block__badge">non blocca</span>}
               <span className="block__badge">{event.calendarName}</span>
             </div>
             <div className="block__time">{range(event.start, event.end)}</div>
@@ -240,6 +241,19 @@ export function DayCalendar({
           <div className="empty">Niente in programma per questo giorno.</div>
         )}
       </div>
+
+      {events.some((event) => event.kind === 'soft' || event.allDay) && (
+        <p className="grid-legend">
+          <span className="grid-legend__swatch" aria-hidden="true" />
+          <span>
+            Tratteggiato = evento che <strong>non blocca</strong> il piano: segnato come
+            “libero” in Google, per l’intera giornata, un contesto di lavoro (es. Applied
+            GenAI, Zelf Work) o da un calendario di solo contesto. Il piano può
+            programmarci attività sopra; un contesto universitario accetta solo lavoro
+            universitario.
+          </span>
+        </p>
+      )}
     </>
   );
 }

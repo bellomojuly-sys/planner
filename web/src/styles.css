@@ -844,3 +844,23 @@ code {
 .all-day-event[role='button'] {
   cursor: pointer;
 }
+
+/* Explains the dashed style: soft events do not block the scheduler. */
+.grid-legend {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 12px 0 0 56px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.grid-legend__swatch {
+  flex: none;
+  width: 18px;
+  height: 12px;
+  margin-top: 2px;
+  border: 1px dashed var(--ink-faint);
+  border-radius: 3px;
+}
