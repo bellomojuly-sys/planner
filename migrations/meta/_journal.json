@@ -64,6 +64,13 @@
       "when": 1790001052999,
       "tag": "0008_manual_plan_edits",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1790002937986,
+      "tag": "0009_generic_travel",
+      "breakpoints": true
     }
   ]
 }

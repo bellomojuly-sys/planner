@@ -103,6 +103,69 @@ export function applyTaskPersonalRules(
   return task;
 }
 
+/** A location that is a link or a meeting app, not a place to travel to. */
+const ONLINE_RE =
+  /https?:\/\/|www\.|\bzoom\b|teams|google meet|meet\.google|webex|skype|whereby|\bonline\b|\bvirtual\b|\bremote\b|\bda remoto\b|\bcall\b|videochiamata/i;
+
+export function isOnlineEvent(title: string | undefined, location: string | null | undefined): boolean {
+  return ONLINE_RE.test(location ?? '') || /\bonline\b|\bwebinar\b|da remoto/i.test(title ?? '');
+}
+
+/** True when the event has a place Giulia physically has to get to. */
+export function hasPhysicalLocation(
+  title: string | undefined,
+  location: string | null | undefined,
+): boolean {
+  return Boolean(location?.trim()) && !isOnlineEvent(title, location);
+}
+
+/**
+ * Identity of a venue, so two events at the same place can share one journey.
+ * Every university location collapses to one campus (rooms differ, the trip
+ * does not); anything else compares its first address segment.
+ */
+export function venueKey(title: string | undefined, location: string | null | undefined): string | null {
+  const text = `${title ?? ''} ${location ?? ''}`;
+  if (UNIVERSITY_PLACE_RE.test(text) && !isOnlineEvent(title, location)) return 'university';
+  if (!hasPhysicalLocation(title, location)) return null;
+  return location!
+    .split(',')[0]!
+    .toLocaleLowerCase('it-IT')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+/** Parses "fontys=20, ristorante da mario=15" into lowercase place → minutes. */
+export function parsePlaceTravelMinutes(raw: string): Array<{ place: string; minutes: number }> {
+  return raw
+    .split(/[,;\n]/)
+    .map((entry) => entry.split('='))
+    .filter((parts) => parts.length === 2)
+    .map(([place, minutes]) => ({
+      place: place!.trim().toLocaleLowerCase('it-IT'),
+      minutes: Number(minutes!.trim()),
+    }))
+    .filter((entry) => entry.place.length > 0 && Number.isFinite(entry.minutes) && entry.minutes >= 0);
+}
+
+const MODE_LABEL: Record<Settings['travelMode'], string> = {
+  bike: 'in bici',
+  public_transport: 'coi mezzi',
+  car: 'in auto',
+  walk: 'a piedi',
+};
+
+/** One-way journey for a generic located event: place override or default, plus buffer. */
+export function genericTravelMinutes(location: string, settings: Settings): number {
+  const text = location.toLocaleLowerCase('it-IT');
+  const known = parsePlaceTravelMinutes(settings.placeTravelMinutes).find((entry) =>
+    text.includes(entry.place),
+  );
+  return (known?.minutes ?? settings.defaultTravelMinutes) + settings.travelBufferMinutes;
+}
+
 /** Adds asymmetric travel/preparation around fixed commitments. */
 export function applyBusyPersonalRules(
   commitment: BusyCommitment,
@@ -157,7 +220,52 @@ export function applyBusyPersonalRules(
     };
   }
 
+  // Any other event with a real place: a dentist, a dinner, a workshop. The
+  // journey is reserved both ways; online meetings and events without a
+  // location keep only the generic margin.
+  if (hasPhysicalLocation(commitment.title, commitment.location)) {
+    const minutes = genericTravelMinutes(commitment.location!, settings);
+    const place = commitment.location!.split(',')[0]!.trim();
+    const mode = MODE_LABEL[settings.travelMode] ?? '';
+    return {
+      ...commitment,
+      travelBeforeMinutes: minutes,
+      travelAfterMinutes: minutes,
+      travelBeforeLabel: `Viaggio ${mode} → ${place}`.replace(/\s+/g, ' '),
+      travelAfterLabel: `Rientro ${mode} da ${place}`.replace(/\s+/g, ' '),
+    };
+  }
+
   return commitment;
+}
+
+/** Two events closer than this at the same venue are one outing. */
+const SAME_VENUE_GAP_MS = 60 * 60_000;
+
+/**
+ * Back-to-back events at the same place need one journey there and one back,
+ * not a round trip each: the first loses its return, the second its outward
+ * trip and its preparation.
+ */
+export function mergeSameVenueJourneys(commitments: BusyCommitment[]): void {
+  const located = commitments
+    .map((item) => ({ item, venue: venueKey(item.title, item.location) }))
+    .filter((entry): entry is { item: BusyCommitment; venue: string } => entry.venue !== null)
+    .sort((a, b) => a.item.start - b.item.start);
+
+  for (let i = 1; i < located.length; i++) {
+    const previous = located[i - 1]!;
+    const current = located[i]!;
+    const gap = current.item.start - previous.item.end;
+    if (previous.venue !== current.venue || gap < 0 || gap > SAME_VENUE_GAP_MS) continue;
+
+    previous.item.travelAfterMinutes = 0;
+    previous.item.travelAfterLabel = undefined;
+    current.item.travelBeforeMinutes = 0;
+    current.item.travelBeforeLabel = undefined;
+    current.item.preparationBeforeMinutes = 0;
+    current.item.preparationLabel = undefined;
+  }
 }
 
 /**
@@ -200,6 +308,8 @@ export function applyCalendarPersonalRules(
     nextShift.travelBeforeMinutes = 0;
     nextShift.travelBeforeLabel = undefined;
   }
+
+  mergeSameVenueJourneys([...busy, ...normalizedContexts]);
 
   return { busy, contexts: normalizedContexts };
 }

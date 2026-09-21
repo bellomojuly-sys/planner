@@ -19,6 +19,8 @@ const NUMERIC_FIELDS: Array<{ key: string; label: string; hint?: string }> = [
   { key: 'universityShowerPreparationMinutes', label: 'Preparazione università con doccia (min)' },
   { key: 'restaurantTravelMinutes', label: 'Casa → ristorante (min)' },
   { key: 'restaurantReturnMinutes', label: 'Ristorante → casa (min)' },
+  { key: 'defaultTravelMinutes', label: 'Viaggio verso altri luoghi, sola andata (min)' },
+  { key: 'travelBufferMinutes', label: 'Margine aggiunto a ogni viaggio (min)' },
   { key: 'gymSessionsPerWeek', label: 'Palestra a settimana' },
   { key: 'gymMaxSessionsPerWeek', label: 'Massimo palestra a settimana' },
   { key: 'gymDurationMinutes', label: 'Durata palestra (min)' },
@@ -291,6 +293,35 @@ export function Settings({ onChanged }: { onChanged: () => void }) {
           <input
             value={String(draft.gymAvoidDays ?? '')}
             onChange={(e) => setDraft({ ...draft, gymAvoidDays: e.target.value })}
+          />
+        </label>
+
+        <label className="field">
+          <span>Mezzo per gli spostamenti</span>
+          <select
+            value={String(draft.travelMode ?? 'bike')}
+            onChange={(e) => setDraft({ ...draft, travelMode: e.target.value })}
+          >
+            <option value="bike">Bici</option>
+            <option value="public_transport">Mezzi pubblici</option>
+            <option value="car">Auto</option>
+            <option value="walk">A piedi</option>
+          </select>
+        </label>
+
+        <label className="field">
+          <span>Indirizzo di casa (solo promemoria, non viene inviato a nessun servizio)</span>
+          <input
+            value={String(draft.homeAddress ?? '')}
+            onChange={(e) => setDraft({ ...draft, homeAddress: e.target.value })}
+          />
+        </label>
+
+        <label className="field">
+          <span>Tempi per luoghi specifici (es. tandarts=10, da mario=15)</span>
+          <input
+            value={String(draft.placeTravelMinutes ?? '')}
+            onChange={(e) => setDraft({ ...draft, placeTravelMinutes: e.target.value })}
           />
         </label>
 

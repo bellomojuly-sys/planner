@@ -207,6 +207,22 @@ export const settings = sqliteTable('settings', {
   restaurantTravelMinutes: integer('restaurant_travel_minutes').notNull().default(20),
   restaurantReturnMinutes: integer('restaurant_return_minutes').notNull().default(20),
 
+  // Generic travel for any event with a physical location that no specific
+  // rule above covers. Travel time is configured, not routed: see
+  // `dl-how-dani-estimates-travel-time`. The address is informational until
+  // a routing provider is chosen; nothing sends it anywhere today.
+  travelMode: text('travel_mode', {
+    enum: ['bike', 'public_transport', 'car', 'walk'],
+  })
+    .notNull()
+    .default('bike'),
+  homeAddress: text('home_address'),
+  defaultTravelMinutes: integer('default_travel_minutes').notNull().default(20),
+  /** Added to every generic journey: locking the bike, finding the room. */
+  travelBufferMinutes: integer('travel_buffer_minutes').notNull().default(5),
+  /** Per-place one-way minutes, "luogo=minuti" separated by commas. */
+  placeTravelMinutes: text('place_travel_minutes').notNull().default(''),
+
   gymSessionsPerWeek: integer('gym_sessions_per_week').notNull().default(3),
   gymMaxSessionsPerWeek: integer('gym_max_sessions_per_week').notNull().default(4),
   gymDurationMinutes: integer('gym_duration_minutes').notNull().default(75),
