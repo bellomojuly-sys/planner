@@ -445,11 +445,13 @@ export function isContextualCompletionReference(query: string): boolean {
     'attivita corrente',
     'l attivita corrente',
     'questo task',
+    'questa task',
     'il task corrente',
     'quello che sto facendo',
     'cio che sto facendo',
     'this action',
     'this task',
+    'this activity',
     'the current action',
     'the current task',
     'what i am doing',
@@ -762,6 +764,21 @@ async function findTask(
   return bestMatch(open, query, (t) => t.title) ?? bestMatch(candidates, query, (t) => t.title);
 }
 
+/**
+ * Function words carry no identity. Without this list "the MG report" scored
+ * "the" as a missing word and English queries fell under the match threshold
+ * far more often than Italian ones, whose articles are mostly two letters.
+ */
+const MATCH_STOPWORDS = new Set([
+  // English
+  'the', 'and', 'for', 'with', 'from', 'this', 'that', 'my', 'your', 'our', 'into',
+  'about', 'task', 'finished', 'done', 'completed', 'complete',
+  // Italian
+  'del', 'della', 'dello', 'dei', 'degli', 'delle', 'alla', 'allo', 'alle', 'agli',
+  'dal', 'dalla', 'nel', 'nella', 'con', 'per', 'una', 'uno', 'gli', 'questa',
+  'questo', 'attivita', 'finito', 'fatto', 'completato',
+]);
+
 function normalize(s: string): string[] {
   return s
     .toLowerCase()
@@ -769,7 +786,22 @@ function normalize(s: string): string[] {
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .split(/\s+/)
-    .filter((w) => w.length > 2);
+    // Two-letter acronyms such as "MG" identify a task; articles do not.
+    .filter((w) => {
+      if (MATCH_STOPWORDS.has(w)) return false;
+      return w.length > 2 || (w.length === 2 && !TWO_LETTER_STOPWORDS.has(w));
+    });
+}
+
+const TWO_LETTER_STOPWORDS = new Set([
+  'il', 'lo', 'la', 'le', 'un', 'di', 'da', 'in', 'su', 'ho', 'ha', 'mi', 'ti', 'si',
+  'ci', 'al', 'ai', 'of', 'to', 'on', 'at', 'is', 'it', 'an', 'my', 'me', 'do', 'or',
+  'as', 'by', 'up', 'we', 'so', 'if', 'no', 'ed', 'po',
+]);
+
+/** Exported for the bilingual voice tests: the same task for IT, EN and mixed queries. */
+export function matchTaskTitle<T extends { title: string }>(items: T[], query: string): T | null {
+  return bestMatch(items, query, (item) => item.title);
 }
 
 /**

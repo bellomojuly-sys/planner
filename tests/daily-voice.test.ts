@@ -5,6 +5,16 @@ import {
   renderVoiceAgenda,
   type DayAgenda,
 } from '../src/jobs/daily';
+import {
+  buildSystemPrompt,
+  detectUtteranceLanguage,
+  normalizeInterpretationLanguage,
+  validateInterpretation,
+} from '../src/integrations/llm';
+import {
+  isContextualCompletionReference,
+  matchTaskTitle,
+} from '../src/services/capture';
 
 const TZ = 'Europe/Rome';
 const NOW = Date.parse('2026-08-12T10:00:00Z'); // 12:00 in Rome
@@ -198,5 +208,79 @@ describe('Siri daily agenda', () => {
     expect(renderVoiceAgenda(agenda(), TZ, NOW, 'en')).toBe(
       'You have nothing else scheduled today.',
     );
+  });
+});
+
+describe('bilingual voice input: Italian, English and mixed give the same result', () => {
+  const openTasks = [
+    { id: 'mg', title: 'Report MG' },
+    { id: 'health', title: "Registrarsi all'assicurazione sanitaria" },
+    { id: 'exam', title: 'Preparare esame Applied GenAI' },
+    { id: 'heemia', title: 'Sito Heemia: pagina prodotti' },
+  ];
+
+  it('resolves the same task from Italian, English and mixed wording', () => {
+    for (const query of ['il report MG', 'the report for MG', 'il report for MG', 'the MG report']) {
+      expect(matchTaskTitle(openTasks, query)?.id, query).toBe('mg');
+    }
+    for (const query of ["l'esame di Applied GenAI", 'the Applied GenAI exam prep', 'prep esame Applied GenAI']) {
+      expect(matchTaskTitle(openTasks, query)?.id, query).toBe('exam');
+    }
+  });
+
+  it('matches the exact Italian title the model copies for an English sentence', () => {
+    // "I finished the health insurance registration" shares no word with the
+    // Italian title; the prompt makes the model copy the title from the list.
+    expect(matchTaskTitle(openTasks, 'health insurance registration')).toBeNull();
+    expect(matchTaskTitle(openTasks, "Registrarsi all'assicurazione sanitaria")?.id).toBe('health');
+  });
+
+  it('pins the cross-language rules in the interpretation prompt', () => {
+    const prompt = buildSystemPrompt({
+      todayIso: '2026-09-21',
+      weekdayName: 'lunedì 21 settembre',
+      openTasks: openTasks.map(({ title }) => ({ title })),
+      shoppingItems: [],
+    });
+    expect(prompt).toContain('copia il titolo ESATTO');
+    expect(prompt).toContain('qualunque lingua abbia usato');
+    expect(prompt).toContain('un misto dei due');
+    expect(prompt).toContain('mai altri valori');
+  });
+
+  it('understands “this action” in all three forms', () => {
+    for (const phrase of ["quest'azione", 'this task', 'questa task', 'this activity']) {
+      expect(isContextualCompletionReference(phrase), phrase).toBe(true);
+    }
+    expect(isContextualCompletionReference('Report MG')).toBe(false);
+  });
+
+  it('answers a mixed sentence in the language of most of its grammar', () => {
+    expect(detectUtteranceLanguage('ho finito il report e cosa devo fare oggi?')).toBe('it');
+    expect(detectUtteranceLanguage('I finished the report, what do I have to do today?')).toBe('en');
+    expect(detectUtteranceLanguage('ho finito il report for MG, cosa devo fare today?')).toBe('it');
+    expect(detectUtteranceLanguage("I finished il report MG, what's my plan for today?")).toBe('en');
+  });
+
+  it('accepts the language labels models actually return instead of failing', () => {
+    const intents = [
+      { kind: 'complete_task', taskQuery: 'Report MG' },
+      { kind: 'question', question: 'What do I have to do today?', date: '2026-09-21' },
+    ];
+    const cases: Array<[string, string, 'it' | 'en']> = [
+      ['it', 'ho finito il report MG, cosa devo fare oggi?', 'it'],
+      ['en-US', 'I finished the MG report, what do I have to do today?', 'en'],
+      ['English', 'I finished the MG report, what do I have to do today?', 'en'],
+      ['mixed', 'ho finito il report for MG, cosa devo fare today?', 'it'],
+    ];
+
+    for (const [label, utterance, expected] of cases) {
+      const parsed = validateInterpretation(
+        normalizeInterpretationLanguage({ language: label, summary: 'ok', intents }, utterance),
+      );
+      expect(parsed.success, label).toBe(true);
+      expect(parsed.success && parsed.data.language).toBe(expected);
+      expect(parsed.success && parsed.data.intents).toEqual(intents);
+    }
   });
 });

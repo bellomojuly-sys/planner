@@ -1,6 +1,7 @@
 # Tasto Azione iPhone — configurazione
 
-L'obiettivo: premere il tasto Azione, dire una frase in italiano, e sentire
+L'obiettivo: premere il tasto Azione, dire una frase in italiano, in inglese
+o mescolando le due, e sentire
 Planner rispondere a voce. La stessa frase può aggiungere, completare o spostare
 attività, e chiedere cosa resta da fare oggi.
 
@@ -28,13 +29,28 @@ App **Comandi** → **+** → aggiungi queste azioni nell'ordine:
 
 | # | Azione | Impostazioni |
 |---|--------|--------------|
-| 1 | **Detta testo** | Lingua: Italiano · Interrompi ascolto: *Dopo una pausa* |
-| 2 | **Ottieni contenuto dell'URL** | vedi sotto |
-| 3 | **Leggi testo** | Testo: il risultato dell'azione 2 · Lingua: Italiano |
+| 1 | **Detta testo** | Lingua: **Predefinita** (non Italiano) · Interrompi ascolto: *Dopo una pausa* |
+| 2 | **Rileva lingua** | Testo: *Testo dettato* |
+| 3 | **Ottieni contenuto dell'URL** | vedi sotto |
+| 4 | **Se** *Lingua* **contiene** `it` | ramo italiano |
+| 5 | **Leggi testo** | Testo: il risultato dell'azione 3 · Lingua: Italiano · Voce: Alice |
+| 6 | **Altrimenti** | ramo inglese |
+| 7 | **Leggi testo** | Testo: il risultato dell'azione 3 · Lingua: Inglese · Voce: Samantha |
+| 8 | **Fine Se** | |
 
-L'azione 3 è ciò che fa parlare Planner: legge a voce cosa ha fatto e, se hai
-fatto una domanda, il programma di oggi. Se preferisci non sentire la
-risposta, usa **Mostra notifica** al suo posto.
+**Perché la lingua della dettatura non va fissata su Italiano.** Con
+«Lingua: Italiano» il riconoscimento vocale trascrive l'inglese come se fosse
+italiano, quindi al server arriva testo sbagliato prima ancora che Planner
+lo interpreti. Con «Predefinita» iOS riconosce entrambe le lingue, e Planner
+capisce anche le frasi miste.
+
+**Perché «contiene» e non «è».** «Rileva lingua» può restituire `it`,
+`it_IT` o il nome della lingua: «contiene it» funziona in tutti questi casi.
+
+Le azioni 5 e 7 fanno parlare Planner: leggono a voce cosa ha fatto e, se hai
+fatto una domanda, il programma del giorno richiesto, nella lingua in cui
+hai parlato. Se preferisci non sentire la risposta, usa **Mostra notifica**
+al loro posto.
 
 Configurazione dell'azione 2 (tocca ▸ per aprire i dettagli):
 
@@ -44,6 +60,10 @@ Configurazione dell'azione 2 (tocca ▸ per aprire i dettagli):
   - `Authorization` → `Bearer IL_TUO_TOKEN`
   - `Content-Type` → `text/plain`
 - **Corpo della richiesta**: `File` → seleziona la variabile **Testo dettato**
+
+Il valore di `Authorization` è `Bearer`, uno spazio e il token intero (43
+caratteri, può contenere trattini). Se il server risponde `unauthorized`, il
+token è incompleto o revocato: generane uno nuovo.
 
 Rinomina il comando in **Nota** (o come preferisci).
 

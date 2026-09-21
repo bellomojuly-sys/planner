@@ -108,6 +108,53 @@ export function validateInterpretation(value: unknown) {
   return ResponseSchema.safeParse(value);
 }
 
+const ENGLISH_MARKERS = new Set([
+  'the', 'an', 'my', 'is', 'are', 'what', 'do', 'have', 'to', 'for',
+  'with', 'and', 'this', 'that', 'finished', 'done', 'move', 'buy', 'today',
+  'tomorrow', 'plan', 'task', 'need', 'add', 'completed', 'from', 'on', 'at', 'of',
+]);
+const ITALIAN_MARKERS = new Set([
+  'il', 'lo', 'la', 'le', 'gli', 'un', 'una', 'ho', 'devo', 'cosa', 'che', 'di', 'per',
+  'con', 'e', 'questa', 'questo', 'finito', 'fatto', 'sposta', 'compra', 'oggi',
+  'domani', 'piano', 'attività', 'mi', 'del', 'della', 'alla', 'al', 'completato',
+]);
+
+/**
+ * Deterministic fallback when the model returns no usable language. Counts
+ * function words, because content words (MG, Heemia, report) are shared.
+ * A mixed sentence answers in the language of most of its grammar; a tie
+ * stays Italian, the default everywhere else in the app.
+ */
+export function detectUtteranceLanguage(text: string): 'it' | 'en' {
+  const words = text.toLowerCase().match(/[\p{L}']+/gu) ?? [];
+  let en = 0;
+  let it = 0;
+  for (const raw of words) {
+    const word = raw.replace(/^[a-z]+'/, '');
+    if (ENGLISH_MARKERS.has(word)) en++;
+    if (ITALIAN_MARKERS.has(word)) it++;
+  }
+  return en > it ? 'en' : 'it';
+}
+
+/**
+ * Models sometimes answer "mixed", "en-US" or "english". Those used to fail
+ * the schema three times in a row and surface as "not understood" — the
+ * reported English failure. Anything else is resolved from the text itself.
+ */
+export function normalizeInterpretationLanguage(json: unknown, text: string): unknown {
+  if (!json || typeof json !== 'object') return json;
+  const raw = (json as { language?: unknown }).language;
+  const value = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  const language =
+    value === 'it' || value.startsWith('it-') || value.startsWith('ital')
+      ? 'it'
+      : value === 'en' || value.startsWith('en-') || value.startsWith('engl') || value.startsWith('ingl')
+        ? 'en'
+        : detectUtteranceLanguage(text);
+  return { ...(json as object), language };
+}
+
 /**
  * Hand-written rather than generated from the zod schema, so the prompt stays
  * short and readable. The constraints are re-checked by zod on the way out.
@@ -203,13 +250,15 @@ const JSON_SCHEMA = {
 
 // ---------------------------------------------------------------------------
 
-function buildSystemPrompt(context: InterpretContext): string {
+/** Exported so tests can pin the language rules without a model call. */
+export function buildSystemPrompt(context: InterpretContext): string {
   return `Sei l'assistente di pianificazione personale di Giulia. Interpreti frasi dettate a voce in italiano o inglese e le trasformi in azioni strutturate.
 
 LINGUA
-- Riconosci se la richiesta è in italiano o inglese e compila language con it o en.
-- Scrivi summary e reason nella stessa lingua usata da Giulia.
-- I titoli e i riferimenti alle attività conservano le parole usate da Giulia.
+- Giulia parla italiano, inglese o un misto dei due nella stessa frase. Tutti e tre i casi sono normali e devono produrre le stesse azioni.
+- Compila language solo con "it" o "en", mai altri valori. Per una frase mista usa la lingua della maggior parte della frase (verbi, articoli, domanda).
+- Scrivi summary e reason nella lingua scelta per language.
+- Il titolo di una NUOVA attività conserva le parole usate da Giulia, nella lingua in cui le ha dette.
 
 CONTESTO
 - Oggi è ${context.todayIso} (${context.weekdayName}), fuso orario Europe/Rome.
@@ -246,7 +295,8 @@ Per ogni create_task stima sempre area, energy, priority, estimatedMinutes e fle
 DATE
 Risolvi sempre i riferimenti relativi in date ISO usando la data di oggi. "domani", "venerdì", "fine mese", "tomorrow", "Friday", "end of the month" diventano YYYY-MM-DD.
 
-Non inventare attività che Giulia non ha nominato. Se cita un'attività esistente, riporta in taskQuery le sue parole, non una tua riformulazione.
+RIFERIMENTI ALLE ATTIVITÀ ESISTENTI
+Non inventare attività che Giulia non ha nominato. Quando cita un'attività che è nell'elenco delle attività aperte, in taskQuery (e in dependsOnQuery) copia il titolo ESATTO dall'elenco, carattere per carattere, qualunque lingua abbia usato: il sistema confronta le parole e non traduce. Esempi: "I finished the health insurance registration" con l'attività "Registrarsi all'assicurazione sanitaria" → taskQuery "Registrarsi all'assicurazione sanitaria"; "ho finito il report for MG" con "Report MG" → taskQuery "Report MG". Solo se nessuna attività dell'elenco corrisponde, riporta le parole di Giulia.
 
 FORMATO DI RISPOSTA
 Rispondi solo con un oggetto json valido che rispetta questo JSON Schema. Per ogni intent includi "kind" e solo i campi che lo riguardano.
@@ -254,6 +304,12 @@ ${JSON.stringify(JSON_SCHEMA)}
 
 Esempio per "ho finito la fattura e compra il latte":
 {"language":"it","summary":"Segno la fattura come fatta e aggiungo il latte alla spesa.","intents":[{"kind":"complete_task","taskQuery":"la fattura"},{"kind":"add_shopping_item","name":"latte","category":"alimentari"}]}
+
+Esempio per "move the report MG to tomorrow" con l'attività "Report MG" (domani = una data ISO):
+{"language":"en","summary":"I’ll move Report MG to tomorrow.","intents":[{"kind":"move_task","taskQuery":"Report MG","moveTo":"YYYY-MM-DD"}]}
+
+Esempio per la frase mista "ho finito il report for MG, cosa devo fare today?":
+{"language":"it","summary":"Segno Report MG come fatto e ti dico il piano di oggi.","intents":[{"kind":"complete_task","taskQuery":"Report MG"},{"kind":"question","question":"Cosa devo fare oggi?","date":"${context.todayIso}"}]}
 
 Esempio per "what is my plan for today?":
 {"language":"en","summary":"I’ll show you today’s plan.","intents":[{"kind":"question","question":"What is my plan for today?","date":"${context.todayIso}"}]}`;
@@ -298,7 +354,7 @@ export async function interpretUtterance(
         });
       }
 
-      const parsed = validateInterpretation(json);
+      const parsed = validateInterpretation(normalizeInterpretationLanguage(json, text));
       if (!parsed.success) {
         throw new PlannerError('upstream_rejected', {
           message: `schema mismatch: ${parsed.error.message.slice(0, 300)}`,
