@@ -905,9 +905,12 @@ function CaptureTokens() {
       <h2>Dettatura · parla con Planner</h2>
       <p className="list__meta">
         Genera un token per il Comando Rapido. Con una frase aggiungi, completi o sposti
-        attività, e chiedi «cosa devo fare oggi?»: Planner ti risponde a voce se l’ultima
-        azione del comando è «Leggi testo». Il token legge solo il programma di oggi: non
-        vede il resto del piano né può cambiare le impostazioni.
+        attività, e chiedi «cosa devo fare oggi?» oppure “what do I have to do today?”:
+        Planner risponde nella lingua della domanda se l’ultima azione è «Leggi testo».
+        Per sentire correttamente entrambe le lingue, «Leggi testo» non deve avere una voce
+        italiana fissa: usa il rilevamento automatico della lingua oppure una voce inglese
+        durante il test in inglese. Il token legge solo il programma richiesto: non vede il
+        resto del piano né può cambiare le impostazioni.
       </p>
 
       {token && (

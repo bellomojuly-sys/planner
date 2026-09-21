@@ -45,6 +45,61 @@ export interface DayAgenda {
   shoppingOpen: number;
 }
 
+const ENGLISH_TITLE_FALLBACKS = new Map<string, string>([
+  ['parlare con olga', 'Talk to Olga'],
+  ['iscriversi / iscrizione assicurazione', 'Register for health insurance'],
+  ['iscrizione assicurazione', 'Register for health insurance'],
+  ['viaggio verso palestra', 'Travel to the gym'],
+  ['ritorno dalla palestra', 'Return from the gym'],
+  ['palestra', 'Gym'],
+  ['doccia e cambio', 'Shower and change'],
+  ['doccia corpo', 'Body shower'],
+  ['doccia capelli', 'Hair wash and shower'],
+  ['preparazione università', 'University preparation'],
+  ['contenuti', 'Content creation'],
+  ['riorganizzare', 'Reorganize'],
+  ['spesa', 'Grocery shopping'],
+  ['pranzo', 'Lunch'],
+  ['compleanno', 'Birthday'],
+]);
+
+/**
+ * Local, privacy-safe translations for recurring and planner-generated agenda
+ * labels. Proper nouns and already-English course/project names stay intact.
+ */
+export function englishAgendaTitle(title: string): string {
+  const normalized = title.trim().toLocaleLowerCase('it-IT');
+  const exact = ENGLISH_TITLE_FALLBACKS.get(normalized);
+  if (exact) return exact;
+
+  const route = title
+    .replace(/^viaggio casa\s*[→-]\s*università$/i, 'Travel from home to university')
+    .replace(/^viaggio università\s*[→-]\s*casa$/i, 'Travel from university to home')
+    .replace(/^viaggio università\s*[→-]\s*lavoro$/i, 'Travel from university to work')
+    .replace(/^ritorno da(?:lla|l|)\s+(.+)$/i, 'Return from $1')
+    .replace(/^viaggio verso\s+(.+)$/i, 'Travel to $1');
+  if (route !== title) return route;
+
+  const patterns: Array<[RegExp, string]> = [
+    [/^parlare con\s+(.+)$/i, 'Talk to $1'],
+    [/^lavorare su\s+(.+)$/i, 'Work on $1'],
+    [/^preparazione(?: per)?\s+(.+)$/i, 'Preparation for $1'],
+    [/^preparare\s+(.+)$/i, 'Prepare $1'],
+    [/^scegliere\s+(.+)$/i, 'Choose $1'],
+    [/^mappare\s+(.+)$/i, 'Map $1'],
+    [/^definire\s+(.+)$/i, 'Define $1'],
+    [/^analizzare\s+(.+)$/i, 'Analyze $1'],
+    [/^pubblicare\s+(.+)$/i, 'Publish $1'],
+    [/^ricerca(?:re)?\s+(.+)$/i, 'Research $1'],
+    [/^iscrizione\s+(.+)$/i, 'Registration for $1'],
+  ];
+  for (const [pattern, replacement] of patterns) {
+    const translated = title.replace(pattern, replacement);
+    if (translated !== title) return translated;
+  }
+  return title;
+}
+
 export async function loadAgenda(
   db: DB,
   userId: string,
@@ -154,7 +209,7 @@ export function renderVoiceAgenda(
 ): string {
   const isToday = agenda.dateKey === localDateKey(now, timezone);
   const english = language === 'en';
-  const locale = english ? 'en-GB' : 'it-IT';
+  const locale = english ? 'en-US' : 'it-IT';
   const dayAnchor = Date.parse(`${agenda.dateKey}T12:00:00Z`);
   const dayLabel = Number.isFinite(dayAnchor)
     ? formatDayLong(dayAnchor, timezone, locale)
@@ -163,7 +218,7 @@ export function renderVoiceAgenda(
     ...agenda.fixed
       .filter((event) => event.kind === 'fixed' && (!isToday || event.end > now))
       .map((event) => ({
-        title: event.title,
+        title: english ? englishAgendaTitle(event.title) : event.title,
         start: event.start,
         end: event.end,
         allDay: event.allDay,
@@ -176,7 +231,7 @@ export function renderVoiceAgenda(
           (!isToday || block.end > now),
       )
       .map((block) => ({
-        title: block.title,
+        title: english ? englishAgendaTitle(block.title) : block.title,
         start: block.start,
         end: block.end,
         allDay: false,
@@ -201,7 +256,10 @@ export function renderVoiceAgenda(
     if (isToday && item.start <= now && item.end > now) {
       return `${english ? 'now' : 'adesso'}, ${item.title}`;
     }
-    return `${english ? 'at' : 'alle'} ${formatTime(item.start, timezone, locale)}, ${item.title}`;
+    if (english) {
+      return `${formatTime(item.start, timezone, locale).replace(/^0/, '')}, ${item.title}`;
+    }
+    return `alle ${formatTime(item.start, timezone, locale)}, ${item.title}`;
   });
 
   if (english) {

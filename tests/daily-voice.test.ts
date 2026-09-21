@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderVoiceAgenda, type DayAgenda } from '../src/jobs/daily';
+import { englishAgendaTitle, renderVoiceAgenda, type DayAgenda } from '../src/jobs/daily';
 
 const TZ = 'Europe/Rome';
 const NOW = Date.parse('2026-08-12T10:00:00Z'); // 12:00 in Rome
@@ -142,8 +142,37 @@ describe('Siri daily agenda', () => {
     );
 
     expect(result).toBe(
-      'Plan for Thursday 13 August: at 09:00, Prepare the project.',
+      'Plan for Thursday, August 13: 9:00 AM, Prepare the project.',
     );
+  });
+
+  it('translates recurring Italian labels and uses English AM/PM times', () => {
+    const result = renderVoiceAgenda(
+      agenda({
+        blocks: [
+          {
+            title: 'Iscriversi / iscrizione assicurazione',
+            start: Date.parse('2026-08-12T19:30:00Z'),
+            end: Date.parse('2026-08-12T20:00:00Z'),
+            kind: 'task',
+            taskId: 'insurance',
+          },
+        ],
+      }),
+      TZ,
+      NOW,
+      'en',
+    );
+
+    expect(result).toBe('Today: 9:30 PM, Register for health insurance.');
+  });
+
+  it('translates generated travel labels without changing proper names', () => {
+    expect(englishAgendaTitle('Viaggio casa → università')).toBe(
+      'Travel from home to university',
+    );
+    expect(englishAgendaTitle('Parlare con Olga')).toBe('Talk to Olga');
+    expect(englishAgendaTitle('Applied GenAI')).toBe('Applied GenAI');
   });
 
   it('uses an English empty-day response', () => {
