@@ -57,6 +57,9 @@ const ENGLISH_TITLE_FALLBACKS = new Map<string, string>([
   ['doccia capelli', 'Hair wash and shower'],
   ['preparazione università', 'University preparation'],
   ['contenuti', 'Content creation'],
+  ['analisi sito', 'Website analysis'],
+  ['laovrare su betsy', 'Work on Betsy'],
+  ['meeting idustry', 'Industry meeting'],
   ['riorganizzare', 'Reorganize'],
   ['spesa', 'Grocery shopping'],
   ['pranzo', 'Lunch'],
@@ -68,17 +71,18 @@ const ENGLISH_TITLE_FALLBACKS = new Map<string, string>([
  * labels. Proper nouns and already-English course/project names stay intact.
  */
 export function englishAgendaTitle(title: string): string {
-  const normalized = title.trim().toLocaleLowerCase('it-IT');
+  const cleanTitle = title.trim();
+  const normalized = cleanTitle.toLocaleLowerCase('it-IT');
   const exact = ENGLISH_TITLE_FALLBACKS.get(normalized);
   if (exact) return exact;
 
-  const route = title
+  const route = cleanTitle
     .replace(/^viaggio casa\s*[→-]\s*università$/i, 'Travel from home to university')
     .replace(/^viaggio università\s*[→-]\s*casa$/i, 'Travel from university to home')
     .replace(/^viaggio università\s*[→-]\s*lavoro$/i, 'Travel from university to work')
     .replace(/^ritorno da(?:lla|l|)\s+(.+)$/i, 'Return from $1')
     .replace(/^viaggio verso\s+(.+)$/i, 'Travel to $1');
-  if (route !== title) return route;
+  if (route !== cleanTitle) return route;
 
   const patterns: Array<[RegExp, string]> = [
     [/^parlare con\s+(.+)$/i, 'Talk to $1'],
@@ -94,10 +98,10 @@ export function englishAgendaTitle(title: string): string {
     [/^iscrizione\s+(.+)$/i, 'Registration for $1'],
   ];
   for (const [pattern, replacement] of patterns) {
-    const translated = title.replace(pattern, replacement);
-    if (translated !== title) return translated;
+    const translated = cleanTitle.replace(pattern, replacement);
+    if (translated !== cleanTitle) return translated;
   }
-  return title;
+  return cleanTitle;
 }
 
 export async function loadAgenda(

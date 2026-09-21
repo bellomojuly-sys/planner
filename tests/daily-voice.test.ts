@@ -172,6 +172,9 @@ describe('Siri daily agenda', () => {
       'Travel from home to university',
     );
     expect(englishAgendaTitle('Parlare con Olga')).toBe('Talk to Olga');
+    expect(englishAgendaTitle('laovrare su betsy ')).toBe('Work on Betsy');
+    expect(englishAgendaTitle('meeting idustry ')).toBe('Industry meeting');
+    expect(englishAgendaTitle('analisi sito')).toBe('Website analysis');
     expect(englishAgendaTitle('Applied GenAI')).toBe('Applied GenAI');
   });
 
