@@ -426,6 +426,14 @@ export const tasks = sqliteTable(
     projectKey: text('project_key'),
 
     isGym: integer('is_gym', { mode: 'boolean' }).notNull().default(false),
+    /**
+     * Set when Giulia deletes one of this task's blocks by hand. The task stays
+     * open (and untouched in Notion) but the scheduler stops placing it until
+     * she puts it back in the plan, so a deleted block is never recreated.
+     */
+    schedulingPaused: integer('scheduling_paused', { mode: 'boolean' })
+      .notNull()
+      .default(false),
 
     /** Notion write-back bookkeeping. */
     dirty: integer('dirty', { mode: 'boolean' }).notNull().default(false),
@@ -513,6 +521,27 @@ export const scheduledBlocks = sqliteTable(
     index('blocks_task_idx').on(t.taskId),
     index('blocks_sync_idx').on(t.userId, t.syncState),
   ],
+);
+
+/**
+ * Generated blocks Giulia deleted by hand. Blocks without a task (gym
+ * sessions, derived travel/preparation) are recomputed on every replan, so
+ * the deletion itself has to be remembered or the next pass recreates them.
+ * `key` is `gym:<YYYY-MM-DD>` or `buffer:<YYYY-MM-DD>:<normalised title>`.
+ */
+export const planSuppressions = sqliteTable(
+  'plan_suppressions',
+  {
+    id: id(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    /** Local day the suppression applies to; lets old rows be pruned. */
+    dayKey: text('day_key').notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('plan_suppressions_key_idx').on(t.userId, t.key)],
 );
 
 // ---------------------------------------------------------------------------

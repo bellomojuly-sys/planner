@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, type PlanResponse, type Block } from './lib/api';
 import { Lock, Setup } from './components/Lock';
 import { DayCalendar } from './components/DayCalendar';
+import { EventSheet, type SheetTarget } from './components/EventSheet';
 import { CaptureBar } from './components/CaptureBar';
 import { Shopping } from './components/Shopping';
 import { Tasks } from './components/Tasks';
@@ -84,6 +85,7 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
   const [offline, setOffline] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<SheetTarget | null>(null);
 
   const loadPlan = useCallback(async () => {
     try {
@@ -142,9 +144,47 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
     }
   }
 
-  async function selectBlock(block: Block) {
+  async function saveSheet(
+    target: SheetTarget,
+    patch: { title: string; start: number; end: number },
+  ) {
+    setError(null);
+    try {
+      if (target.type === 'block') {
+        await api.patch(`/plan/blocks/${target.block.id}/details`, patch);
+        setNotice('Salvato. Il blocco resta fisso a questo orario.');
+      } else {
+        await api.patch(`/plan/events/${target.event.id}`, patch);
+        setNotice('Evento aggiornato anche in Google Calendar.');
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Non sono riuscita a salvare.');
+    }
+    await loadPlan();
+  }
+
+  async function deleteSheet(target: SheetTarget) {
+    setError(null);
+    try {
+      if (target.type === 'block') {
+        const { data } = await api.del<{ outcome: string }>(`/plan/blocks/${target.block.id}`);
+        setNotice(
+          data.outcome === 'task_paused'
+            ? 'Eliminato. L’attività resta aperta, fuori dal piano.'
+            : 'Eliminato. Il piano non lo ricrea.',
+        );
+      } else {
+        await api.del(`/plan/events/${target.event.id}`);
+        setNotice('Evento eliminato anche da Google Calendar.');
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Non sono riuscita a eliminarlo.');
+    }
+    await loadPlan();
+  }
+
+  async function completeBlock(block: Block) {
     if (!block.taskId || block.kind !== 'task') return;
-    if (!confirm(`Segnare "${block.title}" come completata?`)) return;
 
     const taskId = block.taskId;
     setPlan((current) =>
@@ -307,8 +347,19 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
               blocks={dayBlocks}
               events={dayEvents}
               onMove={moveBlock}
-              onSelect={selectBlock}
+              onSelect={(block) => setSheet({ type: 'block', block })}
+              onSelectEvent={(event) => setSheet({ type: 'event', event })}
             />
+            {sheet && (
+              <EventSheet
+                key={sheet.type === 'block' ? sheet.block.id : sheet.event.id}
+                target={sheet}
+                onClose={() => setSheet(null)}
+                onSave={saveSheet}
+                onDelete={deleteSheet}
+                onComplete={completeBlock}
+              />
+            )}
           </>
         )}
 

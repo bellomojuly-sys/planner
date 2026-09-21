@@ -212,3 +212,62 @@ export function reservationExplanation(task: SchedulableTask): string {
   const total = activity + travel + preparation + recovery;
   return `${total} min riservati: ${activity} attività + ${travel} viaggio + ${preparation} preparazione + ${recovery} rientro/recupero.`;
 }
+
+/** The names generated travel/preparation blocks carry; shared with the engine. */
+export function commitmentBufferLabels(commitment: BusyCommitment): {
+  preparation: string;
+  travelBefore: string;
+  travelAfter: string;
+} {
+  const title = commitment.title ?? 'Impegno';
+  return {
+    preparation: commitment.preparationLabel ?? `Preparazione — ${title}`,
+    travelBefore: commitment.travelBeforeLabel ?? `Viaggio verso — ${title}`,
+    travelAfter: commitment.travelAfterLabel ?? `Rientro — ${title}`,
+  };
+}
+
+function bufferKey(ts: number, title: string, timezone: string): string {
+  const normalized = title.trim().toLocaleLowerCase('it-IT').replace(/\s+/g, ' ');
+  return `buffer:${localDateKey(ts, timezone)}:${normalized}`;
+}
+
+/**
+ * Drops the travel/preparation components Giulia deleted by hand. The minutes
+ * go to zero rather than back to the generic event buffer: deleting "Viaggio
+ * verso — Call" says there is no journey, so the time is genuinely free.
+ */
+export function withoutSuppressedBuffers<T extends BusyCommitment>(
+  commitments: T[],
+  suppressed: Set<string>,
+  timezone: string,
+): T[] {
+  if (suppressed.size === 0) return commitments;
+  return commitments.map((commitment) => {
+    const labels = commitmentBufferLabels(commitment);
+    const outwardMs = (commitment.travelBeforeMinutes ?? 0) * 60_000;
+    const preparationMs = (commitment.preparationBeforeMinutes ?? 0) * 60_000;
+    const next = { ...commitment };
+    if (
+      preparationMs > 0 &&
+      suppressed.has(
+        bufferKey(commitment.start - outwardMs - preparationMs, labels.preparation, timezone),
+      )
+    ) {
+      next.preparationBeforeMinutes = 0;
+    }
+    if (
+      outwardMs > 0 &&
+      suppressed.has(bufferKey(commitment.start - outwardMs, labels.travelBefore, timezone))
+    ) {
+      next.travelBeforeMinutes = 0;
+    }
+    if (
+      (commitment.travelAfterMinutes ?? 0) > 0 &&
+      suppressed.has(bufferKey(commitment.end, labels.travelAfter, timezone))
+    ) {
+      next.travelAfterMinutes = 0;
+    }
+    return next;
+  });
+}

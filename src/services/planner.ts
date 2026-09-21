@@ -22,6 +22,7 @@ import type {
 import { buildDecisionBriefing, markMoved } from '../scheduler/decisions';
 import {
   applyCalendarPersonalRules,
+  withoutSuppressedBuffers,
   applyTaskPersonalRules,
 } from '../scheduler/personal-rules';
 import type { DepMap } from '../scheduler/dependencies';
@@ -31,6 +32,7 @@ import {
   inferPhaseDependencies,
 } from './sync';
 import { getCalendarRoutingMap, getPlannerCalendarId } from './calendar-sources';
+import { loadSuppressionKeys } from './manual-edits';
 import { DAY_MS, localDateKey, formatRange } from '../lib/time';
 import { toPlannerError } from '../lib/errors';
 import type { Env } from '../env';
@@ -165,6 +167,7 @@ export async function replan(
       existingBlocks,
       calendarRouting,
       completedGymAt,
+      suppressedKeys,
     ] = await Promise.all([
       loadSchedulableTasks(db, userId, prefs.settings),
       loadDependencies(db, userId),
@@ -173,12 +176,19 @@ export async function replan(
       loadFutureBlocks(db, userId, now),
       getCalendarRoutingMap(db, userId),
       loadCompletedGymAt(db, userId, Date.now()),
+      loadSuppressionKeys(db, userId, localDateKey(now, prefs.timezone)),
     ]);
 
-    const { busy, contexts } = applyCalendarPersonalRules(
+    const withRules = applyCalendarPersonalRules(
       busyRows,
       contextRows,
       prefs.settings,
+      prefs.timezone,
+    );
+    const busy = withoutSuppressedBuffers(withRules.busy, suppressedKeys, prefs.timezone);
+    const contexts = withoutSuppressedBuffers(
+      withRules.contexts,
+      suppressedKeys,
       prefs.timezone,
     );
 
@@ -202,6 +212,7 @@ export async function replan(
       pinnedBlocks,
       knownTaskEnds,
       completedGymAt,
+      suppressedKeys,
     });
 
     const evaluated = withMoveDecisions(result, existingBlocks, prefs.timezone);
@@ -359,6 +370,8 @@ async function loadSchedulableTasks(
         eq(tasks.userId, userId),
         ne(tasks.status, 'done'),
         ne(tasks.status, 'cancelled'),
+        // Deleted from the plan by hand: open, but not for the scheduler.
+        eq(tasks.schedulingPaused, false),
       ),
     );
 

@@ -20,6 +20,7 @@ import {
   type Zone,
 } from './types';
 import { buildDecisionBriefing, buildPlanDecisions } from './decisions';
+import { commitmentBufferLabels } from './personal-rules';
 
 const DAY_MS = 86_400_000;
 
@@ -171,8 +172,19 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     busy: input.busy,
     alreadyScheduled: explicitGym.length,
     completedGymAt: input.completedGymAt ?? [],
+    suppressedKeys: input.suppressedKeys ?? new Set(),
+    // A gym session edited by hand is pinned: it already fills its week slot.
+    pinnedGymAt: pinned.filter((b) => b.kind === 'gym').map((b) => b.start),
   });
-  blocks.push(...gymBlocks);
+  blocks.push(
+    ...gymBlocks.filter(
+      (block) =>
+        block.kind === 'gym' ||
+        !input.suppressedKeys?.has(
+          `buffer:${localDateKey(block.start, timezone)}:${normalizeTitle(block.title)}`,
+        ),
+    ),
+  );
 
   // -------------------------------------------------------------------------
   // Tasks, in dependency order.
@@ -304,7 +316,7 @@ function buildCommitmentBuffers(
 ): PlacedBlock[] {
   const blocks: PlacedBlock[] = [];
   for (const commitment of commitments) {
-    const title = commitment.title ?? 'Impegno';
+    const labels = commitmentBufferLabels(commitment);
     const preparationMs = (commitment.preparationBeforeMinutes ?? 0) * MINUTE_MS;
     const outwardMs = (commitment.travelBeforeMinutes ?? 0) * MINUTE_MS;
     const returnMs = (commitment.travelAfterMinutes ?? 0) * MINUTE_MS;
@@ -320,7 +332,7 @@ function buildCommitmentBuffers(
     if (preparationMs > 0) {
       const start = commitment.start - outwardMs - preparationMs;
       components.push({
-        title: commitment.preparationLabel ?? `Preparazione — ${title}`,
+        title: labels.preparation,
         start,
         end: start + preparationMs,
         zone: zoneForInstant(start, timezone),
@@ -329,7 +341,7 @@ function buildCommitmentBuffers(
     if (outwardMs > 0) {
       const start = commitment.start - outwardMs;
       components.push({
-        title: commitment.travelBeforeLabel ?? `Viaggio verso — ${title}`,
+        title: labels.travelBefore,
         start,
         end: commitment.start,
         zone: zoneForInstant(start, timezone),
@@ -337,7 +349,7 @@ function buildCommitmentBuffers(
     }
     if (returnMs > 0) {
       components.push({
-        title: commitment.travelAfterLabel ?? `Rientro — ${title}`,
+        title: labels.travelAfter,
         start: commitment.end,
         end: commitment.end + returnMs,
         zone: zoneForInstant(commitment.end, timezone),
@@ -357,6 +369,10 @@ function buildCommitmentBuffers(
     });
   }
   return blocks;
+}
+
+function normalizeTitle(title: string): string {
+  return title.trim().toLocaleLowerCase('it-IT').replace(/\s+/g, ' ');
 }
 
 function zoneForInstant(ts: number, timezone: string): Zone {
@@ -674,6 +690,8 @@ function placeGymSessions(params: {
   busy: ScheduleInput['busy'];
   alreadyScheduled: number;
   completedGymAt: number[];
+  suppressedKeys: Set<string>;
+  pinnedGymAt: number[];
 }): PlacedBlock[] {
   const {
     pool,
@@ -685,6 +703,8 @@ function placeGymSessions(params: {
     busy,
     alreadyScheduled,
     completedGymAt,
+    suppressedKeys,
+    pinnedGymAt,
   } = params;
   if (settings.gymSessionsPerWeek <= 0) return [];
 
@@ -719,7 +739,18 @@ function placeGymSessions(params: {
   }
 
   const weekCount = Math.ceil(days.length / 7);
-  let lastWorkoutEnd = Math.max(Number.NEGATIVE_INFINITY, ...completedGymAt);
+  let lastWorkoutEnd = Math.max(
+    Number.NEGATIVE_INFINITY,
+    ...completedGymAt,
+    ...pinnedGymAt.filter((start) => start <= now),
+  );
+  // Days that already hold their session (pinned) or were skipped on purpose.
+  const settledDays = new Set([
+    ...pinnedGymAt.map((start) => localDateKey(start, timezone)),
+    ...[...suppressedKeys]
+      .filter((key) => key.startsWith('gym:'))
+      .map((key) => key.slice(4)),
+  ]);
   for (let weekIndex = 0; weekIndex < weekCount; weekIndex++) {
     const target = Math.min(
       settings.gymSessionsPerWeek,
@@ -738,6 +769,12 @@ function placeGymSessions(params: {
         : 0,
     );
     const weekDays = days.slice(weekIndex * 7, weekIndex * 7 + 7);
+    const settledThisWeek = weekDays.filter((day) =>
+      settledDays.has(localDateKey(day, timezone)),
+    ).length;
+    if (settledThisWeek > 0) {
+      perWeek.set(weekIndex, Math.min(target, (perWeek.get(weekIndex) ?? 0) + settledThisWeek));
+    }
 
     // Monday Zumba is part of the real workout sequence, not a reason to drop
     // the preferred Monday gym. Fit travel + gym before it, then return home
@@ -749,7 +786,11 @@ function placeGymSessions(params: {
         /zumba/i.test(event.title ?? '') &&
         weekKeys.has(localDateKey(event.start, timezone)),
     );
-    if ((perWeek.get(weekIndex) ?? 0) < target && zumba) {
+    if (
+      (perWeek.get(weekIndex) ?? 0) < target &&
+      zumba &&
+      !settledDays.has(localDateKey(zumba.start, timezone))
+    ) {
       const bufferMs = settings.bufferAroundEventsMinutes * MINUTE_MS;
       const preEnd = zumba.start - bufferMs;
       const preStart = preEnd - outwardMs - workoutMs;
@@ -823,7 +864,11 @@ function placeGymSessions(params: {
     const candidates = [
       ...weekDays.filter((day) => preferred.has(localWeekday(day, timezone))),
       ...weekDays.filter((day) => !preferred.has(localWeekday(day, timezone))),
-    ].filter((day) => !avoided.has(localWeekday(day, timezone)));
+    ].filter(
+      (day) =>
+        !avoided.has(localWeekday(day, timezone)) &&
+        !settledDays.has(localDateKey(day, timezone)),
+    );
 
     for (const day of candidates) {
       const done = perWeek.get(weekIndex) ?? 0;

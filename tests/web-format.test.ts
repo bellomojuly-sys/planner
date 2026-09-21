@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   addDays,
+  dateInputValue,
+  fromDateAndTime,
   overlapsDay,
   sameDay,
   startOfDay,
+  timeInputValue,
 } from '../web/src/lib/format';
 
 describe('planner calendar day boundaries', () => {
@@ -29,5 +32,18 @@ describe('planner calendar day boundaries', () => {
     const middleDay = Date.parse('2026-08-20T10:00:00.000Z');
 
     expect(overlapsDay(tripStart, tripEnd, middleDay)).toBe(true);
+  });
+});
+
+describe('event sheet date and time inputs', () => {
+  it('round-trips a Rome-local date and time', () => {
+    const ts = Date.parse('2026-09-21T07:30:00Z'); // 09:30 in Rome (CEST)
+    expect(dateInputValue(ts)).toBe('2026-09-21');
+    expect(timeInputValue(ts)).toBe('09:30');
+    expect(fromDateAndTime('2026-09-21', '09:30')).toBe(ts);
+  });
+
+  it('uses winter time after the October change', () => {
+    expect(fromDateAndTime('2026-10-26', '09:30')).toBe(Date.parse('2026-10-26T08:30:00Z'));
   });
 });

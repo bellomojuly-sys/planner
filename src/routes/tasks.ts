@@ -13,6 +13,7 @@ import {
   finishCompletionInBackground,
   inferActualMinutes,
 } from '../services/completion';
+import { resumeTaskScheduling } from '../services/manual-edits';
 
 export const taskRoutes = new Hono<AppBindings>();
 
@@ -164,6 +165,19 @@ taskRoutes.patch('/:id', requireAuth('full'), async (c) => {
   const diff = await replan(c.env, db, userId, 'manual');
   await drainOutbox(c.env, db);
 
+  return c.json({ ok: true, diff });
+});
+
+/**
+ * Undoes "delete from the plan": the task was paused when one of its blocks
+ * was deleted by hand, and only this puts it back in automatic planning.
+ */
+taskRoutes.post('/:id/resume-scheduling', requireAuth('full'), async (c) => {
+  const db = c.get('db');
+  const { userId } = c.get('auth');
+  await resumeTaskScheduling(db, userId, c.req.param('id'));
+  const diff = await replan(c.env, db, userId, 'manual', { confirmed: true });
+  await drainOutbox(c.env, db);
   return c.json({ ok: true, diff });
 });
 

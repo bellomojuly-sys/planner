@@ -23,6 +23,7 @@ import { DAY_MS } from '../lib/time';
 import { PlannerError, toPlannerError } from '../lib/errors';
 import type { Env } from '../env';
 import type { CalendarRole } from './calendar-sources';
+import { dismissBlock } from './manual-edits';
 
 export interface SyncReport {
   tasksUpserted: number;
@@ -420,6 +421,7 @@ export async function syncCalendar(
       role,
       keywords,
       calendarSummary,
+      env.APP_TIMEZONE,
     ),
   );
 
@@ -478,6 +480,7 @@ export async function upsertCalendarEvents(
   role: Exclude<CalendarRole, 'ignore'>,
   keywords: string[],
   calendarSummary = '',
+  timezone = 'Europe/Rome',
 ): Promise<SyncReport> {
   const report = emptyReport();
 
@@ -486,6 +489,34 @@ export async function upsertCalendarEvents(
     // be ignored: a drag in Google Calendar is a real manual move. Report it
     // to the caller, which temporarily pins it through one cascade replan.
     if (event.isPlannerBlock) {
+      // Deleted by Giulia in Google. Our own deletions never reach here: a
+      // replan removes the local row first, and a re-routed block no longer
+      // carries this event id. Treat it exactly like a delete in the PWA, or
+      // the next replan would restore the event with the same stable id.
+      if (event.cancelled && event.plannerBlockId) {
+        const block = await db.query.scheduledBlocks.findFirst({
+          where: and(
+            eq(scheduledBlocks.userId, userId),
+            eq(scheduledBlocks.id, event.plannerBlockId),
+          ),
+        });
+        if (
+          block &&
+          block.googleEventId === event.externalId &&
+          block.syncState !== 'deleted' &&
+          (block.calendarId === null || block.calendarId === calendarId)
+        ) {
+          try {
+            await dismissBlock(db, userId, block.id, timezone, {
+              deletedInGoogle: event.externalId,
+            });
+            report.changed = true;
+          } catch {
+            // A break cannot be dismissed; the replan will simply rewrite it.
+          }
+        }
+        continue;
+      }
       if (!event.cancelled && event.plannerBlockId) {
         const block = await db.query.scheduledBlocks.findFirst({
           where: and(

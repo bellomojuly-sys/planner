@@ -130,6 +130,32 @@ export function Tasks({ onChanged }: { onChanged: () => void }) {
                       task.recoveryMinutes,
                   )}`}
               </div>
+              {task.schedulingPaused && task.status !== 'done' && (
+                <div className="list__meta">
+                  Fuori dal piano: hai eliminato il suo blocco.{' '}
+                  <button
+                    className="btn"
+                    data-variant="quiet"
+                    disabled={pendingIds.has(task.id)}
+                    onClick={async () => {
+                      setError(null);
+                      try {
+                        await api.post(`/tasks/${task.id}/resume-scheduling`);
+                        await load();
+                        onChanged();
+                      } catch (err) {
+                        setError(
+                          err instanceof ApiError
+                            ? err.message
+                            : 'Non sono riuscita a rimetterla nel piano.',
+                        );
+                      }
+                    }}
+                  >
+                    Rimetti nel piano
+                  </button>
+                </div>
+              )}
             </div>
 
             <span className="chip">{task.status === 'skipped' ? 'saltata' : task.status === 'postponed' ? 'rimandata' : `P${task.priority}`}</span>

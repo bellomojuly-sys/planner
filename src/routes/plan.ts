@@ -12,6 +12,14 @@ import {
   scheduleRuns,
 } from '../db/schema';
 import { replan, moveBlock, unpinBlock } from '../services/planner';
+import {
+  blockEditability,
+  dismissBlock,
+  editCalendarEvent,
+  editPlannerBlock,
+  eventEditability,
+  removeCalendarEvent,
+} from '../services/manual-edits';
 import { drainOutbox } from '../services/outbox';
 import {
   completeTaskLocally,
@@ -101,6 +109,7 @@ planRoutes.get('/', async (c) => {
           partIndex: b.partIndex,
           partCount: b.partCount,
           syncState: b.syncState,
+          ...blockEditability(b),
           area: task?.area ?? null,
           energy: task?.energy ?? null,
           priority: task?.priority ?? null,
@@ -111,6 +120,7 @@ planRoutes.get('/', async (c) => {
       .filter((e) => !e.cancelled)
       .map((e) => {
         const source = sourcesByCalendarId.get(e.calendarId);
+        const access = eventEditability(source);
         return {
           id: e.id,
           title: e.title,
@@ -123,6 +133,8 @@ planRoutes.get('/', async (c) => {
           calendarId: e.calendarId,
           calendarName: source?.summary ?? e.calendarId,
           color: source?.color ?? '#9aa3b8',
+          editable: access.editable,
+          readOnlyReason: access.reason,
         };
       })
       .sort((a, b) => a.start - b.start),
@@ -235,6 +247,60 @@ planRoutes.patch('/blocks/:id', requireAuth('full'), async (c) => {
   );
   await drainOutbox(c.env, c.get('db'));
 
+  return c.json({ ok: true, diff });
+});
+
+const EditInput = z.object({
+  title: z.string().trim().min(1).max(200),
+  start: z.number().int(),
+  end: z.number().int(),
+});
+
+/**
+ * Edit from the event sheet: title and times. Unlike a drag this pins the
+ * block permanently, so no later replan overwrites what Giulia typed.
+ */
+planRoutes.patch('/blocks/:id/details', requireAuth('full'), async (c) => {
+  const db = c.get('db');
+  const { userId } = c.get('auth');
+  const body = EditInput.parse(await c.req.json());
+
+  await editPlannerBlock(db, userId, c.req.param('id'), body, c.env.APP_TIMEZONE);
+  const diff = await replan(c.env, db, userId, 'task_moved', { confirmed: true });
+  await drainOutbox(c.env, db);
+  return c.json({ ok: true, diff });
+});
+
+/** Deletes a planner block and remembers it, so the replan cannot bring it back. */
+planRoutes.delete('/blocks/:id', requireAuth('full'), async (c) => {
+  const db = c.get('db');
+  const { userId } = c.get('auth');
+
+  const result = await dismissBlock(db, userId, c.req.param('id'), c.env.APP_TIMEZONE);
+  const diff = await replan(c.env, db, userId, 'manual', { confirmed: true });
+  await drainOutbox(c.env, db);
+  return c.json({ ok: true, ...result, diff });
+});
+
+/** Edits a real calendar event (lesson, shift, appointment) in Google. */
+planRoutes.patch('/events/:id', requireAuth('full'), async (c) => {
+  const db = c.get('db');
+  const { userId } = c.get('auth');
+  const body = EditInput.parse(await c.req.json());
+
+  await editCalendarEvent(c.env, db, userId, c.req.param('id'), body);
+  const diff = await replan(c.env, db, userId, 'calendar_change');
+  await drainOutbox(c.env, db);
+  return c.json({ ok: true, diff });
+});
+
+planRoutes.delete('/events/:id', requireAuth('full'), async (c) => {
+  const db = c.get('db');
+  const { userId } = c.get('auth');
+
+  await removeCalendarEvent(c.env, db, userId, c.req.param('id'));
+  const diff = await replan(c.env, db, userId, 'calendar_change');
+  await drainOutbox(c.env, db);
   return c.json({ ok: true, diff });
 });
 

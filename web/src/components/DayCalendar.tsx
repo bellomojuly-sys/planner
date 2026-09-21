@@ -12,6 +12,7 @@ interface Props {
   events: CalendarEventView[];
   onMove: (blockId: string, start: number, end: number) => void;
   onSelect: (block: Block) => void;
+  onSelectEvent: (event: CalendarEventView) => void;
 }
 
 interface DragState {
@@ -31,7 +32,14 @@ interface DragState {
  * not fire on iOS at all. Pointer capture also means the gesture survives the
  * finger leaving the element, which matters on a small screen.
  */
-export function DayCalendar({ dayStart, blocks, events, onMove, onSelect }: Props) {
+export function DayCalendar({
+  dayStart,
+  blocks,
+  events,
+  onMove,
+  onSelect,
+  onSelectEvent,
+}: Props) {
   const gridRef = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [dragDelta, setDragDelta] = useState(0);
@@ -60,8 +68,11 @@ export function DayCalendar({ dayStart, blocks, events, onMove, onSelect }: Prop
   const yFor = (ts: number) => (minutesOfDay(ts) - fromMinute) * PX_PER_MINUTE;
 
   function handlePointerDown(e: React.PointerEvent, block: Block) {
-    // Fixed events and split-part boundaries are not draggable.
-    if (block.kind === 'break' || block.kind === 'buffer') return;
+    // Derived intervals are not draggable, but a tap still opens them.
+    if (block.kind === 'break' || block.kind === 'buffer') {
+      onSelect(block);
+      return;
+    }
 
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     setDrag({
@@ -112,7 +123,14 @@ export function DayCalendar({ dayStart, blocks, events, onMove, onSelect }: Prop
       {allDayEvents.length > 0 && (
         <div className="all-day-events" aria-label="Eventi per l'intera giornata">
           {allDayEvents.map((event) => (
-            <div className="all-day-event" key={event.id}>
+            <div
+              className="all-day-event"
+              key={event.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => onSelectEvent(event)}
+              onKeyDown={(e) => e.key === 'Enter' && onSelectEvent(event)}
+            >
               <span style={{ backgroundColor: event.color }} aria-hidden="true" />
               <strong>{event.title}</strong>
               <small>{event.calendarName}</small>
@@ -154,6 +172,11 @@ export function DayCalendar({ dayStart, blocks, events, onMove, onSelect }: Prop
             key={event.id}
             className="block"
             data-kind={event.kind}
+            role="button"
+            tabIndex={0}
+            aria-label={`${event.title}, ${range(event.start, event.end)}`}
+            onClick={() => onSelectEvent(event)}
+            onKeyDown={(e) => e.key === 'Enter' && onSelectEvent(event)}
             style={{
               top: yFor(event.start),
               height: Math.max(
@@ -194,6 +217,7 @@ export function DayCalendar({ dayStart, blocks, events, onMove, onSelect }: Prop
               ),
             }}
             onPointerDown={(e) => handlePointerDown(e, block)}
+            onKeyDown={(e) => e.key === 'Enter' && onSelect(block)}
           >
             <div className="block__title">
               {block.title}

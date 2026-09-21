@@ -86,3 +86,29 @@ export const ENERGY_LABELS: Record<string, string> = {
   medium: 'Media',
   low: 'Bassa',
 };
+
+/** "HH:MM" in Rome time, for `<input type="time">`. */
+export function timeInputValue(ts: number): string {
+  return new Intl.DateTimeFormat(LOCALE, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: TZ,
+  }).format(ts);
+}
+
+/** "YYYY-MM-DD" in Rome time, for `<input type="date">`. */
+export function dateInputValue(ts: number): string {
+  const local = new TZDate(ts, TZ);
+  const month = String(local.getMonth() + 1).padStart(2, '0');
+  const day = String(local.getDate()).padStart(2, '0');
+  return `${local.getFullYear()}-${month}-${day}`;
+}
+
+/** The instant for a Rome-local date and "HH:MM", DST-safe. */
+export function fromDateAndTime(date: string, hhmm: string): number {
+  const [year, month, day] = date.split('-').map(Number);
+  const [hour, minute] = hhmm.split(':').map(Number);
+  const local = new TZDate(year!, (month ?? 1) - 1, day ?? 1, hour ?? 0, minute ?? 0, 0, TZ);
+  return local.getTime();
+}

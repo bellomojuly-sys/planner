@@ -79,6 +79,11 @@ export interface Block {
   partIndex: number;
   partCount: number;
   syncState: 'pending' | 'synced' | 'failed' | 'deleted';
+  /** Title and times can be changed from the event sheet. */
+  editable: boolean;
+  deletable: boolean;
+  /** Why an action is unavailable, in Italian. */
+  reason: string | null;
   area: string | null;
   energy: 'high' | 'medium' | 'low' | null;
   priority: number | null;
@@ -96,6 +101,9 @@ export interface CalendarEventView {
   calendarId: string;
   calendarName: string;
   color: string;
+  /** False for ICS feeds and calendars shared read-only. */
+  editable: boolean;
+  readOnlyReason: string | null;
 }
 
 export interface PlanResponse {
@@ -146,6 +154,8 @@ export interface TaskView {
   actualMinutes: number | null;
   dueAt: number | null;
   pinned: boolean;
+  /** Removed from the plan by deleting one of its blocks. */
+  schedulingPaused: boolean;
   location: string | null;
   travelMinutes: number;
   preparationMinutes: number;

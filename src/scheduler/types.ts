@@ -135,6 +135,12 @@ export interface ScheduleInput {
   knownTaskEnds?: Map<string, number>;
   /** Completed workouts in the recent week still count toward the target. */
   completedGymAt?: number[];
+  /**
+   * Generated blocks Giulia deleted by hand (`gym:<day>`, `buffer:<day>:<title>`).
+   * A suppressed gym day gets no session but still counts toward that week's
+   * target: she chose to skip it, the scheduler must not compensate elsewhere.
+   */
+  suppressedKeys?: Set<string>;
   /** How much task work a single day may hold. Defaults in `DEFAULT_LOAD`. */
   load?: DailyLoad;
 }

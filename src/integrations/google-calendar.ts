@@ -606,6 +606,59 @@ export async function listPlannerEvents(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Editing events Giulia owns
+// ---------------------------------------------------------------------------
+
+export interface CalendarEventPatch {
+  title: string;
+  startAt: number;
+  endAt: number;
+  allDay: boolean;
+}
+
+/**
+ * Edits an event that is not ours (a lesson, a shift, anything created by
+ * hand). Only the three fields the planner UI exposes are sent, so location,
+ * attendees and reminders set in Google survive the edit.
+ */
+export async function updateCalendarEvent(
+  env: Env,
+  calendarId: string,
+  eventId: string,
+  patch: CalendarEventPatch,
+  timezone: string,
+): Promise<{ etag: string | null }> {
+  const body = patch.allDay
+    ? {
+        summary: patch.title,
+        start: { date: new Date(patch.startAt).toISOString().slice(0, 10) },
+        end: { date: new Date(patch.endAt).toISOString().slice(0, 10) },
+      }
+    : {
+        summary: patch.title,
+        start: { dateTime: new Date(patch.startAt).toISOString(), timeZone: timezone },
+        end: { dateTime: new Date(patch.endAt).toISOString(), timeZone: timezone },
+      };
+
+  const updated = await calFetch<any>(
+    env,
+    `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+    { method: 'PATCH', body: JSON.stringify(body) },
+    'google.updateEvent',
+  );
+  return { etag: updated?.etag ?? null };
+}
+
+/** Deletes any event; an event that is already gone counts as success. */
+export async function deleteCalendarEvent(
+  env: Env,
+  calendarId: string,
+  eventId: string,
+): Promise<void> {
+  return deletePlannerEvent(env, calendarId, eventId);
+}
+
 export async function deletePlannerEvent(
   env: Env,
   calendarId: string,

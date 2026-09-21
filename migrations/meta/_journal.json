@@ -57,6 +57,13 @@
       "when": 1789923767144,
       "tag": "0007_lowly_the_initiative",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1790001052999,
+      "tag": "0008_manual_plan_edits",
+      "breakpoints": true
     }
   ]
 }
