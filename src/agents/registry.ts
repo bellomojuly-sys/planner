@@ -12,7 +12,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'agents/orchestrator',
     capabilities: ['route_goal', 'select_domain_agent', 'synthesise', 'request_commit'],
     a2aEligible: false,
-    status: 'active',
+    status: 'registered',
   },
   {
     id: 'context-perception',
@@ -22,7 +22,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'D1 task context adapter',
     capabilities: ['read_open_tasks', 'identify_domain', 'report_unknowns'],
     a2aEligible: false,
-    status: 'active',
+    status: 'registered',
   },
   {
     id: 'reality-planner',
@@ -32,7 +32,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'services/planner',
     capabilities: ['prioritise', 'keep_move_postpone_ask', 'request_feasible_schedule'],
     a2aEligible: false,
-    status: 'active',
+    status: 'registered',
   },
   {
     id: 'research-knowledge',
@@ -42,7 +42,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'agents/research D1 evidence adapter',
     capabilities: ['retrieve_d1_evidence', 'separate_fact_assumption_unknown', 'report_source_gaps'],
     a2aEligible: false,
-    status: 'active',
+    status: 'registered',
   },
   {
     id: 'execution-operator',
@@ -52,7 +52,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'agents/orchestrator commitProposalSet',
     capabilities: ['create_tasks', 'create_dependencies', 'request_replan'],
     a2aEligible: false,
-    status: 'active',
+    status: 'registered',
   },
   {
     id: 'voice-conversation',
@@ -62,7 +62,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'services/capture',
     capabilities: ['interpret_voice', 'answer_agenda', 'apply_confirmed_intent'],
     a2aEligible: false,
-    status: 'active',
+    status: 'registered',
   },
   {
     id: 'memory-learning',
@@ -72,7 +72,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'scheduler/estimate learning adapter',
     capabilities: ['apply_duration_learning', 'preserve_provenance'],
     a2aEligible: false,
-    status: 'active',
+    status: 'registered',
   },
   {
     id: 'outcome-evaluator',
@@ -82,7 +82,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'scheduler deterministic validation',
     capabilities: ['validate_schema', 'validate_feasibility', 'report_unplaced'],
     a2aEligible: false,
-    status: 'active',
+    status: 'registered',
   },
   {
     id: 'university-context',
@@ -92,7 +92,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'agents/orchestrator domain profile',
     capabilities: ['curated_project_profile', 'd1_task_context', 'session_decomposition'],
     a2aEligible: true,
-    status: 'active',
+    status: 'registered',
   },
   {
     id: 'work-portfolio',
@@ -102,7 +102,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'agents/orchestrator domain profile',
     capabilities: ['curated_project_profile', 'd1_task_context', 'cross_project_decomposition'],
     a2aEligible: true,
-    status: 'active',
+    status: 'registered',
   },
   {
     id: 'personal-admin',
@@ -112,9 +112,26 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     implementation: 'agents/orchestrator domain profile',
     capabilities: ['d1_task_context', 'bureaucracy_decomposition', 'errand_preparation'],
     a2aEligible: true,
-    status: 'active',
+    status: 'registered',
   },
 ] as const;
+
+const DEEPSEEK_AGENT_IDS = new Set<AgentDefinition['id']>([
+  'dani-supervisor',
+  'voice-conversation',
+  'university-context',
+  'work-portfolio',
+  'personal-admin',
+]);
+
+export function agentRuntimeStatus(
+  agentId: AgentDefinition['id'],
+  deepseekConfigured: boolean,
+): 'ready' | 'unconfigured' {
+  return DEEPSEEK_AGENT_IDS.has(agentId) && !deepseekConfigured
+    ? 'unconfigured'
+    : 'ready';
+}
 
 export interface DomainProfile {
   agentId: DomainAgentId;

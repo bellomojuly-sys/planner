@@ -12,13 +12,14 @@ export interface OperationalContextTask {
 export interface EvidenceClaim {
   claim: string;
   evidenceRef: string;
-  source: 'd1';
+  source: 'd1' | 'curated_profile';
 }
 
 export interface EvidencePack {
   sourceBoundary: 'd1_operational_state';
   domainAgent: DomainAgentId;
   projectFocus: string | null;
+  projectFocuses: string[];
   claims: EvidenceClaim[];
   assumptions: string[];
   unknowns: string[];
@@ -38,11 +39,32 @@ const PROJECT_MARKERS: Record<DomainAgentId, Array<{ key: string; markers: RegEx
   'personal-admin': [],
 };
 
+const PROJECT_SEARCH_TERMS: Record<string, string[]> = {
+  amexio: ['amexio'],
+  berzi: ['berzi'],
+  dani: ['dani', 'planner'],
+  heemia: ['heemia'],
+  'mg-dmg': ['mg', 'dmg', 'mg integration', 'dmg integration'],
+};
+
+export function projectSearchTerms(projectFocus: string): string[] {
+  return PROJECT_SEARCH_TERMS[projectFocus] ?? [projectFocus];
+}
+
 export function detectProjectFocus(
   domainAgent: DomainAgentId,
   outcome: string,
 ): string | null {
   return PROJECT_MARKERS[domainAgent].find(({ markers }) => markers.test(outcome))?.key ?? null;
+}
+
+export function detectProjectFocuses(
+  domainAgent: DomainAgentId,
+  outcome: string,
+): string[] {
+  return PROJECT_MARKERS[domainAgent]
+    .filter(({ markers }) => markers.test(outcome))
+    .map(({ key }) => key);
 }
 
 export function matchesProjectFocus(
@@ -65,13 +87,20 @@ export function buildEvidencePack(params: {
   outcome: string;
   tasks: OperationalContextTask[];
   projectFocus?: string | null;
+  projectFocuses?: string[];
 }): EvidencePack {
-  const projectFocus =
-    params.projectFocus === undefined
-      ? detectProjectFocus(params.domainAgent, params.outcome)
-      : params.projectFocus;
-  const relevant = projectFocus
-    ? params.tasks.filter((task) => matchesProjectFocus(projectFocus, task))
+  const projectFocuses =
+    params.projectFocuses ??
+    (params.projectFocus === undefined
+      ? detectProjectFocuses(params.domainAgent, params.outcome)
+      : params.projectFocus
+        ? [params.projectFocus]
+        : []);
+  const projectFocus = projectFocuses.length === 1 ? projectFocuses[0]! : null;
+  const relevant = projectFocuses.length > 0
+    ? params.tasks.filter((task) =>
+        projectFocuses.some((focus) => matchesProjectFocus(focus, task)),
+      )
     : params.tasks;
 
   const claims = relevant.map((task) => ({
@@ -82,13 +111,13 @@ export function buildEvidencePack(params: {
 
   const unknowns: string[] = [];
   const gaps: string[] = [];
-  if (!projectFocus && params.domainAgent !== 'personal-admin') {
+  if (projectFocuses.length === 0 && params.domainAgent !== 'personal-admin') {
     unknowns.push('The requested project is not explicit.');
   }
   if (claims.length === 0) {
     gaps.push(
-      projectFocus
-        ? `No open D1 tasks were found for ${projectFocus}.`
+      projectFocuses.length > 0
+        ? `No open D1 tasks were found for ${projectFocuses.join(', ')}.`
         : 'No relevant open D1 tasks were found.',
     );
   }
@@ -98,6 +127,7 @@ export function buildEvidencePack(params: {
     sourceBoundary: 'd1_operational_state',
     domainAgent: params.domainAgent,
     projectFocus,
+    projectFocuses,
     claims,
     assumptions: [],
     unknowns,

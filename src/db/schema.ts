@@ -789,6 +789,46 @@ export const estimateModel = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Agent proposals
+// ---------------------------------------------------------------------------
+
+/**
+ * Immutable server-side snapshot shown to Giulia before an agent commit.
+ * The browser sends back only this id: it cannot silently replace the
+ * approved tasks, dependencies or evidence between preview and execution.
+ */
+export const agentProposals = sqliteTable(
+  'agent_proposals',
+  {
+    id: id(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    domainAgent: text('domain_agent', {
+      enum: ['university-context', 'work-portfolio', 'personal-admin'],
+    }).notNull(),
+    payload: text('payload', { mode: 'json' }).$type<unknown>().notNull(),
+    proposalHash: text('proposal_hash').notNull(),
+    status: text('status', {
+      enum: ['pending', 'committed', 'expired', 'cancelled'],
+    })
+      .notNull()
+      .default('pending'),
+    expiresAt: integer('expires_at').notNull(),
+    committedAt: integer('committed_at'),
+    createdTaskIds: text('created_task_ids', { mode: 'json' })
+      .$type<string[]>()
+      .notNull()
+      .default([]),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('agent_proposals_user_status_idx').on(t.userId, t.status, t.createdAt),
+    index('agent_proposals_user_hash_idx').on(t.userId, t.proposalHash),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Operations
 // ---------------------------------------------------------------------------
 

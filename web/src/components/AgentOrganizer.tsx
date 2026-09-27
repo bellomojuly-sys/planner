@@ -24,7 +24,12 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
             Il Supervisor passa l’outcome all’agente giusto. Il planner globale decide poi dove collocare le attività.
           </p>
         </div>
-        {registry && <span className="chip">{registry.agents.length} agenti attivi</span>}
+        {registry && (
+          <span className="chip">
+            {registry.agents.filter((agent) => agent.runtimeStatus === 'ready').length} pronti ·{' '}
+            {registry.agents.length} registrati
+          </span>
+        )}
       </div>
 
       <label className="field">
@@ -102,10 +107,30 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
           )}
           {draft.verificationRequired.length > 0 && (
             <div className="banner" data-tone="info">
-              <strong>Fonti o verifiche mancanti:</strong>{' '}
+              <strong>Verifiche richieste prima di inserire:</strong>{' '}
               {draft.verificationRequired.join(' · ')}
             </div>
           )}
+          {draft.sourceGaps.length > 0 && (
+            <div className="banner" data-tone="info">
+              <strong>Limiti delle fonti disponibili:</strong>{' '}
+              {draft.sourceGaps.join(' · ')}
+            </div>
+          )}
+          <details>
+            <summary>Come Dani ha costruito la proposta</summary>
+            <ol>
+              {draft.trace.steps.map((step) => (
+                <li key={`${step.agentId}-${step.operation}`}>
+                  <strong>{step.agentId}</strong>
+                  <span>{step.detail}</span>
+                </li>
+              ))}
+            </ol>
+            {draft.evidenceRefs.length > 0 && (
+              <small>Riferimenti usati: {draft.evidenceRefs.join(' · ')}</small>
+            )}
+          </details>
           <ol>
             {draft.proposals.map((proposal, index) => (
               <li key={`${proposal.title}-${index}`}>
@@ -125,16 +150,13 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
             <button
               className="btn"
               data-variant="primary"
-                disabled={busy || draft.trace.status === 'input_required'}
+                disabled={busy || draft.blockingVerificationRequired}
               onClick={async () => {
                 setBusy(true);
                 setError(null);
                 try {
                   await api.post('/agents/commit', {
                     sourceRequestId: draft.trace.request.requestId,
-                    domainAgent: draft.domainAgent,
-                    summary: draft.summary,
-                    proposals: draft.proposals,
                   });
                   setNotice(`${draft.proposals.length} attività inserite e passate al planner.`);
                   setDraft(null);
@@ -150,7 +172,7 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
             >
               {busy
                 ? 'Pianifico…'
-                : draft.trace.status === 'input_required'
+                : draft.blockingVerificationRequired
                   ? 'Chiarisci prima di inserire'
                   : 'Inserisci e pianifica'}
             </button>

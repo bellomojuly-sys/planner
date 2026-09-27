@@ -171,7 +171,8 @@ export interface AgentDefinitionView {
   implementation: string;
   capabilities: string[];
   a2aEligible: boolean;
-  status: 'active';
+  status: 'registered';
+  runtimeStatus: 'ready' | 'unconfigured';
 }
 
 export interface AgentRegistryView {
@@ -209,10 +210,26 @@ export interface OrganizedOutcome {
   unknowns: string[];
   evidenceRefs: string[];
   verificationRequired: string[];
+  sourceGaps: string[];
+  blockingVerificationRequired: boolean;
+  expiresAt: number;
+  actionsProposed: string[];
+  costAndLatency: {
+    durationMs: number;
+    tokenUsage: number | null;
+    costUsd: number | null;
+  };
   trace: {
     request: { requestId: string };
     agents: string[];
     status: 'completed' | 'input_required' | 'failed' | 'cancelled';
+    steps: Array<{
+      agentId: string;
+      operation: string;
+      status: 'completed' | 'input_required' | 'failed' | 'cancelled';
+      detail: string;
+      evidenceRefs: string[];
+    }>;
   };
   committed: false;
 }

@@ -29,7 +29,7 @@ export interface AgentDefinition {
   implementation: string;
   capabilities: string[];
   a2aEligible: boolean;
-  status: 'active';
+  status: 'registered';
 }
 
 export const SpecialistAuthoritySchema = z.enum([
@@ -54,6 +54,8 @@ export const SpecialistRequestSchema = z.object({
   allowedSources: z.array(z.string().max(120)).max(20).default(['d1']),
   allowedCapabilities: z.array(z.string().max(120)).max(30).default([]),
   authority: SpecialistAuthoritySchema.default('propose'),
+  deadline: z.number().int().positive().nullable().default(null),
+  costBudget: z.number().nonnegative().nullable().default(null),
   privacyClass: PrivacyClassSchema.default('personal'),
   expectedOutputSchema: z.string().max(300),
   acceptanceContract: z.string().min(1).max(1000),
@@ -65,6 +67,15 @@ export const SpecialistTraceSchema = z.object({
   request: SpecialistRequestSchema,
   agents: z.array(z.enum(AGENT_IDS)).min(1),
   status: z.enum(['completed', 'input_required', 'failed', 'cancelled']),
+  steps: z.array(
+    z.object({
+      agentId: z.enum(AGENT_IDS),
+      operation: z.string().min(1).max(120),
+      status: z.enum(['completed', 'input_required', 'failed', 'cancelled']),
+      detail: z.string().max(500),
+      evidenceRefs: z.array(z.string().max(300)).max(100).default([]),
+    }),
+  ).min(1),
 });
 
 export const TaskProposalSchema = z.object({
@@ -101,12 +112,5 @@ export const TaskProposalSetSchema = z.object({
 });
 
 export const CommitProposalInputSchema = z.object({
-  sourceRequestId: z.string().uuid().optional(),
-  domainAgent: z.enum([
-    'university-context',
-    'work-portfolio',
-    'personal-admin',
-  ]),
-  summary: z.string().max(1000).optional(),
-  proposals: z.array(TaskProposalSchema).min(1).max(12),
-});
+  sourceRequestId: z.string().uuid(),
+}).strict();

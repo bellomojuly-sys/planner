@@ -1,4 +1,4 @@
-import { and, eq, ne, desc, gt, lte } from 'drizzle-orm';
+import { and, eq, ne, desc, gt, lte, notInArray } from 'drizzle-orm';
 import type { DB } from '../db/client';
 import {
   tasks,
@@ -182,7 +182,12 @@ async function buildContext(db: DB, userId: string, timezone: string) {
   const openTasks = await db
     .select({ title: tasks.title, area: tasks.area })
     .from(tasks)
-    .where(and(eq(tasks.userId, userId), ne(tasks.status, 'done')))
+    .where(
+      and(
+        eq(tasks.userId, userId),
+        notInArray(tasks.status, ['done', 'cancelled']),
+      ),
+    )
     .orderBy(desc(tasks.updatedAt))
     .limit(60);
 

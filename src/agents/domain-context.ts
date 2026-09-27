@@ -1,11 +1,12 @@
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { and, desc, eq, inArray, like, notInArray, or } from 'drizzle-orm';
 import type { DB } from '../db/client';
 import { tasks } from '../db/schema';
 import type { DomainAgentId } from './contracts';
 import {
   buildEvidencePack,
-  detectProjectFocus,
+  detectProjectFocuses,
   matchesProjectFocus,
+  projectSearchTerms,
   type EvidencePack,
   type OperationalContextTask,
 } from './research';
@@ -71,7 +72,9 @@ export const DOMAIN_AGENT_INSTRUCTIONS: Record<DomainAgentId, string> = {
 export interface DomainContext {
   domainAgent: DomainAgentId;
   projectFocus: string | null;
+  projectFocuses: string[];
   curatedProfile: CuratedProjectProfile | null;
+  curatedProfiles: CuratedProjectProfile[];
   operationalTasks: OperationalContextTask[];
   evidencePack: EvidencePack;
   sourceRefs: string[];
@@ -88,8 +91,18 @@ export async function buildDomainContext(
   domainAgent: DomainAgentId,
   outcome: string,
 ): Promise<DomainContext> {
-  const projectFocus = detectProjectFocus(domainAgent, outcome);
-  const limit = projectFocus ? 80 : 40;
+  const projectFocuses = detectProjectFocuses(domainAgent, outcome);
+  const projectFocus = projectFocuses.length === 1 ? projectFocuses[0]! : null;
+  const limit = projectFocuses.length > 0 ? 80 : 40;
+  const domainAreas = areasForDomain(domainAgent);
+  const projectCondition = projectFocuses.length > 0
+    ? or(
+        ...projectFocuses.flatMap((focus) => projectSearchTerms(focus)).flatMap((term) => [
+          like(tasks.projectKey, `%${term}%`),
+          like(tasks.title, `%${term}%`),
+        ]),
+      )
+    : undefined;
   const rows = await db
     .select({
       id: tasks.id,
@@ -100,30 +113,58 @@ export async function buildDomainContext(
       projectKey: tasks.projectKey,
     })
     .from(tasks)
-    .where(and(eq(tasks.userId, userId), ne(tasks.status, 'done')))
+    .where(
+      and(
+        eq(tasks.userId, userId),
+        notInArray(tasks.status, ['done', 'cancelled']),
+        inArray(tasks.area, domainAreas),
+        projectCondition,
+      ),
+    )
     .orderBy(desc(tasks.updatedAt))
     .limit(limit);
 
   const domainRows = rows.filter((task) => belongsToDomain(task, domainAgent));
-  const operationalTasks = projectFocus
-    ? domainRows.filter((task) => matchesProjectFocus(projectFocus, task))
+  const operationalTasks = projectFocuses.length > 0
+    ? domainRows.filter((task) =>
+        projectFocuses.some((focus) => matchesProjectFocus(focus, task)),
+      )
     : domainRows;
-  const curatedProfile = projectFocus ? CURATED_PROJECT_PROFILES[projectFocus] ?? null : null;
-  const evidencePack = buildEvidencePack({
+  const curatedProfiles = projectFocuses
+    .map((focus) => CURATED_PROJECT_PROFILES[focus])
+    .filter((profile): profile is CuratedProjectProfile => Boolean(profile));
+  const curatedProfile = curatedProfiles.length === 1 ? curatedProfiles[0]! : null;
+  const operationalEvidencePack = buildEvidencePack({
     domainAgent,
     outcome,
     tasks: operationalTasks,
     projectFocus,
+    projectFocuses,
   });
+  const evidencePack: EvidencePack = {
+    ...operationalEvidencePack,
+    claims: [
+      ...curatedProfiles.flatMap((profile) => profile.context.map((claim) => ({
+        claim,
+        evidenceRef: profile.ref,
+        source: 'curated_profile' as const,
+      }))),
+      ...operationalEvidencePack.claims,
+    ],
+  };
   const sourceRefs = [
-    ...(curatedProfile ? [curatedProfile.ref] : []),
-    ...evidencePack.claims.map((claim) => claim.evidenceRef),
+    ...new Set([
+      ...curatedProfiles.map((profile) => profile.ref),
+      ...evidencePack.claims.map((claim) => claim.evidenceRef),
+    ]),
   ];
 
   return {
     domainAgent,
     projectFocus,
+    projectFocuses,
     curatedProfile,
+    curatedProfiles,
     operationalTasks,
     evidencePack,
     sourceRefs,
@@ -135,4 +176,10 @@ function belongsToDomain(task: OperationalContextTask, domainAgent: DomainAgentI
   if (domainAgent === 'university-context') return task.area === 'university';
   if (domainAgent === 'work-portfolio') return task.area === 'heemia' || task.area === 'mg';
   return ['general', 'personal', 'health', 'errand', 'career'].includes(task.area);
+}
+
+function areasForDomain(domainAgent: DomainAgentId) {
+  if (domainAgent === 'university-context') return ['university'] as const;
+  if (domainAgent === 'work-portfolio') return ['heemia', 'mg'] as const;
+  return ['general', 'personal', 'health', 'errand', 'career'] as const;
 }
