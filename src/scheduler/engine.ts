@@ -129,13 +129,7 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     }),
   );
 
-  const commitmentBuffers = buildCommitmentBuffers(input.busy, timezone);
-  const contextBuffers = buildCommitmentBuffers(input.contexts ?? [], timezone);
-  const blocks: PlacedBlock[] = [
-    ...pinned,
-    ...commitmentBuffers,
-    ...contextBuffers,
-  ];
+  const blocks: PlacedBlock[] = [...pinned];
   const breakMs = settings.breakMinutes * MINUTE_MS;
 
   // A day with a shift has less room for anything else, whatever its free
@@ -162,7 +156,7 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   // before discretionary work is the whole point of having it in settings.
   // -------------------------------------------------------------------------
   const explicitGym = input.tasks.filter((t) => t.isGym);
-  const gymBlocks = placeGymSessions({
+  const gym = placeGymSessions({
     pool,
     settings,
     timezone,
@@ -177,7 +171,7 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     pinnedGymAt: pinned.filter((b) => b.kind === 'gym').map((b) => b.start),
   });
   blocks.push(
-    ...gymBlocks.filter(
+    ...gym.blocks.filter(
       (block) =>
         block.kind === 'gym' ||
         !input.suppressedKeys?.has(
@@ -185,6 +179,17 @@ export function schedule(input: ScheduleInput): ScheduleResult {
         ),
     ),
   );
+
+  // Commitment buffers come after the gym so a session that chains into a
+  // commitment can strip that commitment's home preparation and home→venue
+  // journey — Giulia arrives from the gym, not from home.
+  const commitmentBuffers = buildCommitmentBuffers(
+    input.busy,
+    timezone,
+    gym.chainedCommitmentStarts,
+  );
+  const contextBuffers = buildCommitmentBuffers(input.contexts ?? [], timezone);
+  blocks.push(...commitmentBuffers, ...contextBuffers);
 
   // -------------------------------------------------------------------------
   // Tasks, in dependency order.
@@ -313,12 +318,21 @@ export function schedule(input: ScheduleInput): ScheduleResult {
 function buildCommitmentBuffers(
   commitments: NonNullable<ScheduleInput['contexts']> | ScheduleInput['busy'],
   timezone: string,
+  suppressHomeApproachFor?: ReadonlySet<number>,
 ): PlacedBlock[] {
   const blocks: PlacedBlock[] = [];
   for (const commitment of commitments) {
     const labels = commitmentBufferLabels(commitment);
-    const preparationMs = (commitment.preparationBeforeMinutes ?? 0) * MINUTE_MS;
-    const outwardMs = (commitment.travelBeforeMinutes ?? 0) * MINUTE_MS;
+    // A morning gym that chains into this commitment already carries Giulia
+    // from the gym to its door and showers her there, so the home preparation
+    // and the home→venue journey are dropped: she does not go home first.
+    const suppressApproach = suppressHomeApproachFor?.has(commitment.start) ?? false;
+    const preparationMs = suppressApproach
+      ? 0
+      : (commitment.preparationBeforeMinutes ?? 0) * MINUTE_MS;
+    const outwardMs = suppressApproach
+      ? 0
+      : (commitment.travelBeforeMinutes ?? 0) * MINUTE_MS;
     const returnMs = (commitment.travelAfterMinutes ?? 0) * MINUTE_MS;
     const area = commitment.area;
     const zone = zoneForInstant(commitment.start, timezone);
@@ -692,7 +706,8 @@ function placeGymSessions(params: {
   completedGymAt: number[];
   suppressedKeys: Set<string>;
   pinnedGymAt: number[];
-}): PlacedBlock[] {
+}): { blocks: PlacedBlock[]; chainedCommitmentStarts: Set<number> } {
+  const chainedCommitmentStarts = new Set<number>();
   const {
     pool,
     settings,
@@ -706,7 +721,9 @@ function placeGymSessions(params: {
     suppressedKeys,
     pinnedGymAt,
   } = params;
-  if (settings.gymSessionsPerWeek <= 0) return [];
+  if (settings.gymSessionsPerWeek <= 0) {
+    return { blocks: [], chainedCommitmentStarts };
+  }
 
   const workoutMs = settings.gymDurationMinutes * MINUTE_MS;
   const outwardMs = settings.gymTravelMinutes * MINUTE_MS;
@@ -780,6 +797,44 @@ function placeGymSessions(params: {
       });
       cursor += component.ms;
     });
+  };
+
+  // A session that leads straight into a morning commitment: shower at the gym,
+  // then travel from the gym to the venue — no return home, no home shower.
+  const emitChain = (startAt: number, travelToNextMs: number, destination: string) => {
+    const components: Array<{
+      title: string;
+      ms: number;
+      kind: PlacedBlock['kind'];
+    }> = [
+      { title: 'Viaggio verso palestra', ms: outwardMs, kind: 'buffer' },
+      { title: 'Palestra', ms: workoutMs, kind: 'gym' },
+      { title: 'Doccia / cambio', ms: preparationMs, kind: 'buffer' },
+      { title: `Viaggio palestra → ${destination}`, ms: travelToNextMs, kind: 'buffer' },
+    ];
+    const partCount = components.filter((item) => item.ms > 0).length;
+    let cursor = startAt;
+    components.forEach((component, partIndex) => {
+      if (component.ms <= 0) return;
+      out.push({
+        taskId: null,
+        title: component.title,
+        start: cursor,
+        end: cursor + component.ms,
+        kind: component.kind,
+        zone: 'morning',
+        partIndex,
+        partCount,
+        zoneCompromised: false,
+      });
+      cursor += component.ms;
+    });
+  };
+
+  const shortDestination = (title?: string): string => {
+    if (!title) return 'impegno';
+    const head = title.split(/[:\-–—(]/)[0]!.trim();
+    return head.length === 0 || head.length > 24 ? 'impegno' : head;
   };
 
   for (let weekIndex = 0; weekIndex < weekCount; weekIndex++) {
@@ -921,28 +976,69 @@ function placeGymSessions(params: {
           timezone,
           settings.gymStartMinutes - settings.gymTravelMinutes,
         );
-        const seqEnd = seqStart + durationMs;
         if (seqStart < Math.max(now, recoveryFloor)) continue;
-        if (busy.some((event) => event.start < seqEnd && event.end > seqStart)) {
+        const workoutEnd = seqStart + outwardMs + workoutMs;
+
+        const reservePool = (from: number, to: number) => {
+          for (const slot of [...pool.list()]) {
+            if (slot.start < to && slot.end > from) {
+              const overlapStart = Math.max(slot.start, from);
+              pool.consume(slot, overlapStart, Math.min(slot.end, to) - overlapStart, 0);
+            }
+          }
+        };
+
+        // If a physical commitment follows the workout that morning, chain into
+        // it: shower at the gym and travel gym → venue, dropping the return home
+        // and the venue's own home preparation and home → venue journey.
+        const dayKey = localDateKey(day, timezone);
+        const nextCommitment = busy
+          .filter(
+            (event) =>
+              localDateKey(event.start, timezone) === dayKey &&
+              event.start >= workoutEnd &&
+              ((event.travelBeforeMinutes ?? 0) > 0 ||
+                (event.preparationBeforeMinutes ?? 0) > 0),
+          )
+          .sort((a, b) => a.start - b.start)[0];
+
+        if (nextCommitment) {
+          const travelToNextMs =
+            (nextCommitment.travelBeforeMinutes ?? settings.gymTravelMinutes) * MINUTE_MS;
+          const chainEnd = workoutEnd + preparationMs + travelToNextMs;
+          // Must arrive in time and clear every other fixed event; otherwise the
+          // gym is skipped for the day rather than double-booked.
+          if (chainEnd > nextCommitment.start) continue;
+          if (
+            busy.some(
+              (event) =>
+                event !== nextCommitment &&
+                event.start < chainEnd &&
+                event.end > seqStart,
+            )
+          ) {
+            continue;
+          }
+          reservePool(seqStart, chainEnd);
+          const destination =
+            nextCommitment.area === 'university'
+              ? 'università'
+              : shortDestination(nextCommitment.title);
+          emitChain(seqStart, travelToNextMs, destination);
+          chainedCommitmentStarts.add(nextCommitment.start);
+          lastWorkoutEnd = workoutEnd;
+          perWeek.set(weekIndex, done + 1);
           continue;
         }
 
-        // Reserve any pool time the tail of the sequence reaches into, so no
-        // automatic task is booked on top of the workout.
-        for (const slot of [...pool.list()]) {
-          if (slot.start < seqEnd && slot.end > seqStart) {
-            const overlapStart = Math.max(slot.start, seqStart);
-            pool.consume(
-              slot,
-              overlapStart,
-              Math.min(slot.end, seqEnd) - overlapStart,
-              0,
-            );
-          }
+        // No morning commitment: an ordinary home-based session.
+        const seqEnd = seqStart + durationMs;
+        if (busy.some((event) => event.start < seqEnd && event.end > seqStart)) {
+          continue;
         }
-
+        reservePool(seqStart, seqEnd);
         emitSequence(seqStart, 'morning');
-        lastWorkoutEnd = seqStart + outwardMs + workoutMs;
+        lastWorkoutEnd = workoutEnd;
         perWeek.set(weekIndex, done + 1);
         continue;
       }
@@ -964,7 +1060,7 @@ function placeGymSessions(params: {
     }
   }
 
-  return out;
+  return { blocks: out, chainedCommitmentStarts };
 }
 
 /**

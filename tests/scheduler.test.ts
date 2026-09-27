@@ -785,6 +785,44 @@ describe('gym', () => {
     expect(localMinutes(sequence[0]!.start, TZ)).toBe(7 * 60 - 25);
   });
 
+  it('chains a morning session into a following commitment, dropping home prep', () => {
+    // University at 09:00 Rome on Tuesday, with the usual home approach metadata.
+    const uniStart = MONDAY + 26 * 3_600_000;
+    const university = {
+      start: uniStart,
+      end: uniStart + 4 * 3_600_000,
+      title: 'Applied GenAI',
+      area: 'university' as const,
+      preparationBeforeMinutes: 60,
+      travelBeforeMinutes: 20,
+      travelAfterMinutes: 20,
+      preparationLabel: 'Preparazione università',
+      travelBeforeLabel: 'Viaggio casa → università',
+      travelAfterLabel: 'Viaggio università → casa',
+    };
+    const result = run([], {
+      settingsOverride: {
+        gymSessionsPerWeek: 1,
+        gymMaxSessionsPerWeek: 1,
+        gymPreferredDays: '2',
+        gymStartMinutes: 7 * 60,
+      },
+      busy: [university],
+    });
+
+    const titles = result.blocks.map((b) => b.title);
+    // Workout is at 07:00, then she showers at the gym and goes straight on.
+    const workout = result.blocks.find((b) => b.kind === 'gym')!;
+    expect(localMinutes(workout.start, TZ)).toBe(7 * 60);
+    expect(titles).toContain('Viaggio palestra → università');
+    // No return home, and the venue's home approach is dropped.
+    expect(titles).not.toContain('Ritorno dalla palestra');
+    expect(titles).not.toContain('Preparazione università');
+    expect(titles).not.toContain('Viaggio casa → università');
+    // The trip back home after university is kept.
+    expect(titles).toContain('Viaggio università → casa');
+  });
+
   it('skips a morning session when a fixed event blocks the slot', () => {
     // A whole-morning commitment on Wednesday overlaps the fixed 07:00 window,
     // so no gym is placed that day (it falls to another morning instead).
