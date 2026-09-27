@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, ApiError, type TaskView } from '../lib/api';
 import { AREA_LABELS, ENERGY_LABELS, dayShort, duration } from '../lib/format';
 import { withTaskStatus } from '../lib/optimistic';
+import { AgentOrganizer } from './AgentOrganizer';
 
 export function Tasks({ onChanged }: { onChanged: () => void }) {
   const [tasks, setTasks] = useState<TaskView[]>([]);
@@ -30,6 +31,13 @@ export function Tasks({ onChanged }: { onChanged: () => void }) {
 
   return (
     <>
+      <AgentOrganizer
+        onCommitted={() => {
+          void load();
+          onChanged();
+        }}
+      />
+
       {error && (
         <div className="banner" data-tone="error" role="alert">
           {error}

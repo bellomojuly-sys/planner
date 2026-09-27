@@ -11,6 +11,7 @@ interface Props {
   blocks: Block[];
   events: CalendarEventView[];
   onMove: (blockId: string, start: number, end: number) => void;
+  onComplete: (block: Block) => Promise<void>;
   onSelect: (block: Block) => void;
   onSelectEvent: (event: CalendarEventView) => void;
 }
@@ -37,6 +38,7 @@ export function DayCalendar({
   blocks,
   events,
   onMove,
+  onComplete,
   onSelect,
   onSelectEvent,
 }: Props) {
@@ -233,6 +235,21 @@ export function DayCalendar({
                   )
                 : range(block.start, block.end)}
             </div>
+            {block.kind === 'task' && block.taskId && (
+              <button
+                className="block__complete"
+                type="button"
+                aria-label={`Completa ${block.title}`}
+                title="Segna come completata"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void onComplete(block);
+                }}
+              >
+                ✓
+              </button>
+            )}
           </div>
         );
       })}

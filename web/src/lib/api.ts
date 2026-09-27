@@ -163,6 +163,50 @@ export interface TaskView {
   flexibility: 'fixed' | 'low' | 'medium' | 'high';
 }
 
+export interface AgentDefinitionView {
+  id: string;
+  name: string;
+  role: 'supervisor' | 'core' | 'domain';
+  transport: 'agent_as_tool';
+  implementation: string;
+  capabilities: string[];
+  a2aEligible: boolean;
+  status: 'active';
+}
+
+export interface AgentRegistryView {
+  architecture: 'supervisor_with_agents_as_tools';
+  taskLedger: 'd1';
+  calendarAuthority: 'reality-planner';
+  a2a: 'reserved_for_independent_boundaries';
+  agents: AgentDefinitionView[];
+  domains: Array<{ agentId: string; label: string }>;
+}
+
+export interface AgentTaskProposal {
+  title: string;
+  notes: string;
+  area: string;
+  energy: 'high' | 'medium' | 'low';
+  priority: number;
+  estimatedMinutes: number;
+  dueDate: string | null;
+  flexibility: 'fixed' | 'low' | 'medium' | 'high';
+  dependsOn: number[];
+  evidence: string;
+}
+
+export interface OrganizedOutcome {
+  supervisor: 'dani-supervisor';
+  contextAgent: 'context-perception';
+  domainAgent: 'university-context' | 'work-portfolio' | 'personal-admin';
+  plannerAgent: 'reality-planner';
+  evaluatorAgent: 'outcome-evaluator';
+  summary: string;
+  proposals: AgentTaskProposal[];
+  committed: false;
+}
+
 export interface ShoppingItemView {
   id: string;
   name: string;

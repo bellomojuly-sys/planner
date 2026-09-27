@@ -74,15 +74,19 @@ export async function syncNotion(
 ): Promise<SyncReport> {
   const report = emptyReport();
 
-  if (!env.NOTION_TOKEN) {
-    report.errors.push('Notion non configurato.');
-    return report;
-  }
-
   const sources = await db
     .select()
     .from(taskSources)
     .where(and(eq(taskSources.userId, userId), eq(taskSources.enabled, true)));
+
+  // Notion is optional. With no enabled database there is nothing to pull,
+  // and a missing token must not block local/app task planning.
+  if (sources.length === 0) return report;
+
+  if (!env.NOTION_TOKEN) {
+    report.errors.push('Notion non configurato.');
+    return report;
+  }
 
   // Loaded once: per-row lookups multiply queries by the size of the
   // database, and D1 caps queries per invocation.

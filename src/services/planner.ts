@@ -41,6 +41,7 @@ import {
   confirmationReasonMessage,
   type ConfirmationReason,
 } from './replan-policy';
+import { isTaskSourceEnabled } from './task-source-policy';
 
 export type RescheduleTrigger =
   | 'cron'
@@ -362,21 +363,30 @@ async function loadSchedulableTasks(
   userId: string,
   settings: Settings,
 ): Promise<SchedulableTask[]> {
-  const rows = await db
-    .select()
-    .from(tasks)
-    .where(
-      and(
-        eq(tasks.userId, userId),
-        ne(tasks.status, 'done'),
-        ne(tasks.status, 'cancelled'),
-        // Deleted from the plan by hand: open, but not for the scheduler.
-        eq(tasks.schedulingPaused, false),
+  const [rows, enabledSources] = await Promise.all([
+    db
+      .select()
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.userId, userId),
+          ne(tasks.status, 'done'),
+          ne(tasks.status, 'cancelled'),
+          // Deleted from the plan by hand: open, but not for the scheduler.
+          eq(tasks.schedulingPaused, false),
+        ),
       ),
-    );
+    db
+      .select({ id: taskSources.id })
+      .from(taskSources)
+      .where(and(eq(taskSources.userId, userId), eq(taskSources.enabled, true))),
+  ]);
 
-  return rows.map((t) =>
-    applyTaskPersonalRules(
+  const enabledSourceIds = new Set(enabledSources.map((source) => source.id));
+
+  return rows
+    .filter((task) => isTaskSourceEnabled(task.sourceId, enabledSourceIds))
+    .map((t) => applyTaskPersonalRules(
       {
         id: t.id,
         title: t.title,
@@ -400,8 +410,7 @@ async function loadSchedulableTasks(
         horizon: t.horizon,
       },
       settings,
-    ),
-  );
+    ));
 }
 
 async function loadDependencies(db: DB, userId: string): Promise<DepMap> {

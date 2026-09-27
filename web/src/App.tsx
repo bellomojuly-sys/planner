@@ -193,7 +193,7 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
         : current,
     );
     setError(null);
-    setNotice('Completata. Sincronizzo Notion e calendario in background…');
+    setNotice('Completata. Aggiorno il piano e il calendario in background…');
 
     try {
       await api.post(`/plan/blocks/${block.id}/complete`);
@@ -347,6 +347,7 @@ function Shell({ view, setView }: { view: View; setView: (v: View) => void }) {
               blocks={dayBlocks}
               events={dayEvents}
               onMove={moveBlock}
+              onComplete={completeBlock}
               onSelect={(block) => setSheet({ type: 'block', block })}
               onSelectEvent={(event) => setSheet({ type: 'event', event })}
             />

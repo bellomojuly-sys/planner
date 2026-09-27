@@ -24,12 +24,21 @@ export interface IntegrationCheck {
   detail: string;
 }
 
-export async function checkIntegrations(env: Env): Promise<IntegrationCheck[]> {
+export async function checkIntegrations(
+  env: Env,
+  options: { notionRequired?: boolean } = {},
+): Promise<IntegrationCheck[]> {
   // Run them together: three sequential network probes make the settings
   // screen feel broken even when everything is fine.
   return Promise.all([
     checkVoice(env),
-    checkNotion(env),
+    options.notionRequired === false
+      ? Promise.resolve<IntegrationCheck>({
+          service: 'notion',
+          state: 'ok',
+          detail: 'Opzionale — nessun database attività Notion è attivo.',
+        })
+      : checkNotion(env),
     checkGoogle(env),
     checkPush(env),
   ]);

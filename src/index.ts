@@ -8,6 +8,7 @@ import { taskRoutes } from './routes/tasks';
 import { shoppingRoutes } from './routes/shopping';
 import { settingsRoutes } from './routes/settings';
 import { captureRoutes } from './routes/capture';
+import { agentRoutes } from './routes/agents';
 import { handleScheduled } from './jobs/cron';
 import { PlannerError, toPlannerError } from './lib/errors';
 import type { Env } from './env';
@@ -41,6 +42,7 @@ app.route('/api/tasks', taskRoutes);
 app.route('/api/shopping', shoppingRoutes);
 app.route('/api/settings', settingsRoutes);
 app.route('/api/capture', captureRoutes);
+app.route('/api/agents', agentRoutes);
 
 app.get('/api/health', (c) =>
   c.json({ ok: true, environment: c.env.ENVIRONMENT, timezone: c.env.APP_TIMEZONE }),

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { AppBindings } from '../auth/middleware';
 import { requireAuth } from '../auth/middleware';
 import {
@@ -68,7 +68,21 @@ settingsRoutes.get('/', async (c) => {
  * asked.
  */
 settingsRoutes.get('/integrations/check', requireAuth('full'), async (c) => {
-  return c.json({ checks: await checkIntegrations(c.env) });
+  const [notionSourceCount] = await c
+    .get('db')
+    .select({ count: sql<number>`count(*)` })
+    .from(taskSources)
+    .where(
+      and(
+        eq(taskSources.userId, c.get('auth').userId),
+        eq(taskSources.enabled, true),
+      ),
+    );
+  return c.json({
+    checks: await checkIntegrations(c.env, {
+      notionRequired: Number(notionSourceCount?.count ?? 0) > 0,
+    }),
+  });
 });
 
 settingsRoutes.patch('/', requireAuth('full'), async (c) => {
@@ -207,6 +221,9 @@ settingsRoutes.post('/sources', requireAuth('full'), async (c) => {
 });
 
 settingsRoutes.patch('/sources/:id', requireAuth('full'), async (c) => {
+  const db = c.get('db');
+  const { userId } = c.get('auth');
+
   const body = z
     .object({
       name: z.string().max(100).optional(),
@@ -217,18 +234,28 @@ settingsRoutes.patch('/sources/:id', requireAuth('full'), async (c) => {
     })
     .parse(await c.req.json());
 
-  await c
-    .get('db')
+  await db
     .update(taskSources)
     .set(body as never)
     .where(
       and(
         eq(taskSources.id, c.req.param('id')),
-        eq(taskSources.userId, c.get('auth').userId),
+        eq(taskSources.userId, userId),
       ),
     );
 
-  return c.json({ ok: true });
+  let diff = null;
+  if (body.enabled !== undefined) {
+    const notionReport = body.enabled
+      ? await syncNotion(c.env, db, userId)
+      : { errors: [] as string[] };
+    diff = await replan(c.env, db, userId, 'manual', {
+      syncErrors: notionReport.errors,
+    });
+    await drainOutbox(c.env, db);
+  }
+
+  return c.json({ ok: true, diff });
 });
 
 settingsRoutes.delete('/sources/:id', requireAuth('full'), async (c) => {

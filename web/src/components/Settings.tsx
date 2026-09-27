@@ -199,6 +199,10 @@ export function Settings({ onChanged }: { onChanged: () => void }) {
 
       <div className="card">
         <h2>Database Notion</h2>
+        <p className="list__meta">
+          I task creati nell’app o con la voce funzionano senza Notion. Disattiva una
+          fonte per escludere in modo reversibile i suoi task dalla lista e dal piano.
+        </p>
         {data.sources.length === 0 && (
           <p className="list__meta">
             Nessun database collegato. Aggiungi General Tasks e MG Integration qui sotto.
@@ -218,6 +222,37 @@ export function Settings({ onChanged }: { onChanged: () => void }) {
                 </div>
               </div>
               <span className="chip">{source.enabled ? 'attivo' : 'disattivo'}</span>
+              <button
+                className="btn"
+                data-variant="quiet"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  setStatus(null);
+                  try {
+                    await api.patch(`/settings/sources/${source.id}`, {
+                      enabled: !source.enabled,
+                    });
+                    setStatus({
+                      tone: 'info',
+                      text: source.enabled
+                        ? `${source.name} disattivato: i suoi task non entrano più nel piano.`
+                        : `${source.name} riattivato e sincronizzato.`,
+                    });
+                    await load();
+                    onChanged();
+                  } catch (err) {
+                    setStatus({
+                      tone: 'error',
+                      text: err instanceof ApiError ? err.message : 'Errore.',
+                    });
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {source.enabled ? 'Disattiva' : 'Attiva'}
+              </button>
             </li>
           ))}
         </ul>

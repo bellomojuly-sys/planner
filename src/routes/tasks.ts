@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { and, desc, eq, ne } from 'drizzle-orm';
 import type { AppBindings } from '../auth/middleware';
 import { requireAuth } from '../auth/middleware';
-import { tasks, taskDependencies, AREAS, ENERGY } from '../db/schema';
+import { tasks, taskDependencies, taskSources, AREAS, ENERGY } from '../db/schema';
 import { applyLearning } from '../scheduler/estimate';
 import { replan } from '../services/planner';
 import { drainOutbox } from '../services/outbox';
@@ -14,6 +14,7 @@ import {
   inferActualMinutes,
 } from '../services/completion';
 import { resumeTaskScheduling } from '../services/manual-edits';
+import { isTaskSourceEnabled } from '../services/task-source-policy';
 
 export const taskRoutes = new Hono<AppBindings>();
 
@@ -31,18 +32,28 @@ taskRoutes.get('/', async (c) => {
     })
     .parse(Object.fromEntries(new URL(c.req.url).searchParams));
 
-  const rows = await db
-    .select()
-    .from(tasks)
-    .where(
-      query.status
-        ? and(eq(tasks.userId, userId), eq(tasks.status, query.status as never))
-        : and(eq(tasks.userId, userId), ne(tasks.status, 'cancelled')),
-    )
-    .orderBy(desc(tasks.updatedAt))
-    .limit(query.limit);
+  const [rows, enabledSources] = await Promise.all([
+    db
+      .select()
+      .from(tasks)
+      .where(
+        query.status
+          ? and(eq(tasks.userId, userId), eq(tasks.status, query.status as never))
+          : and(eq(tasks.userId, userId), ne(tasks.status, 'cancelled')),
+      )
+      .orderBy(desc(tasks.updatedAt))
+      .limit(query.limit),
+    db
+      .select({ id: taskSources.id })
+      .from(taskSources)
+      .where(and(eq(taskSources.userId, userId), eq(taskSources.enabled, true))),
+  ]);
 
-  const filtered = query.area ? rows.filter((t) => t.area === query.area) : rows;
+  const enabledSourceIds = new Set(enabledSources.map((source) => source.id));
+  const activeRows = rows.filter((task) =>
+    isTaskSourceEnabled(task.sourceId, enabledSourceIds),
+  );
+  const filtered = query.area ? activeRows.filter((t) => t.area === query.area) : activeRows;
   return c.json({ tasks: filtered });
 });
 
