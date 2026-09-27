@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   AGENT_IDS,
   CommitProposalInputSchema,
@@ -14,6 +14,7 @@ import {
 import {
   buildDomainPrompt,
   commitRequiresInput,
+  normalizeSimpleCommitment,
   reconcileEvidenceRefs,
 } from '../src/agents/orchestrator';
 import {
@@ -198,6 +199,98 @@ describe('agent foundation', () => {
       travelMinutes: 20,
       preparationMinutes: 20,
     });
+  });
+
+  it('asks one commitment question at a time and does not invent hosting work', () => {
+    const proposalSet = TaskProposalSetSchema.parse({
+      summary: 'Piano barbecue',
+      proposals: [
+        {
+          title: 'Definire invitati e budget',
+          area: 'personal',
+          energy: 'medium',
+          priority: 3,
+          estimatedMinutes: 30,
+          dueDate: '2026-09-27',
+          flexibility: 'high',
+          dependsOn: [],
+          evidence: '',
+        },
+        {
+          title: 'Fare la spesa',
+          area: 'errand',
+          energy: 'low',
+          priority: 3,
+          estimatedMinutes: 60,
+          dueDate: '2026-09-27',
+          flexibility: 'high',
+          dependsOn: [],
+          evidence: '',
+        },
+      ],
+      unknowns: ['ora', 'luogo', 'invitati', 'budget'],
+      clarifyingQuestion: 'A che ora e dove si tiene?',
+    });
+    const normalized = normalizeSimpleCommitment({
+      proposalSet,
+      outcome: 'domani pianifica barbecue',
+      conversation: [],
+      timezone: 'Europe/Rome',
+      defaultTravelMinutes: 20,
+    });
+    expect(normalized.proposals).toHaveLength(1);
+    expect(normalized.proposals[0]!.title).toBe('Barbecue');
+    expect(normalized.clarifyingQuestion).toBe('A che ora devi essere lì?');
+    expect(normalized.unknowns).toEqual(['Orario di inizio di Barbecue']);
+  });
+
+  it('builds the fixed evening only after time, place and duration are answered', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-27T10:00:00.000Z'));
+    const proposalSet = TaskProposalSetSchema.parse({
+      summary: 'Barbecue',
+      proposals: [
+        {
+          title: 'Barbecue',
+          area: 'personal',
+          energy: 'low',
+          priority: 3,
+          estimatedMinutes: 180,
+          dueDate: '2026-09-28',
+          fixedStartAt: '2026-09-28T18:00:00+02:00',
+          location: 'Downtown',
+          flexibility: 'fixed',
+          dependsOn: [],
+          evidence: '',
+        },
+      ],
+    });
+    const normalized = normalizeSimpleCommitment({
+      proposalSet,
+      outcome: 'domani pianifica barbecue',
+      conversation: [
+        { role: 'assistant', content: 'A che ora?' },
+        { role: 'user', content: 'Alle sei circa, devo essere lì.' },
+        { role: 'assistant', content: 'Dove si tiene?' },
+        { role: 'user', content: 'Al Downtown.' },
+        { role: 'assistant', content: 'Fino a che ora?' },
+        { role: 'user', content: 'Tutta la sera.' },
+      ],
+      timezone: 'Europe/Rome',
+      defaultTravelMinutes: 20,
+    });
+    expect(normalized.unknowns).toEqual([]);
+    expect(normalized.clarifyingQuestion).toBeNull();
+    expect(normalized.proposals[0]).toMatchObject({
+      title: 'Barbecue',
+      fixedStartAt: '2026-09-28T16:00:00.000Z',
+      location: 'Downtown',
+      travelMinutes: 20,
+      preparationMinutes: 40,
+      estimatedMinutes: 300,
+      flexibility: 'fixed',
+    });
+    vi.useRealTimers();
   });
 
   it('keeps calendar placement outside the domain-agent prompt', () => {

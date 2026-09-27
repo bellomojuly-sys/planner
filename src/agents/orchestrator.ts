@@ -5,7 +5,7 @@ import { agentProposals, scheduledBlocks, taskDependencies, tasks } from '../db/
 import type { Env } from '../env';
 import { chat } from '../integrations/llm';
 import { PlannerError } from '../lib/errors';
-import { localDateKey } from '../lib/time';
+import { addLocalDays, atLocalMinutes, localDateKey } from '../lib/time';
 import { blendLearning, loadEstimateModel } from '../scheduler/estimate';
 import { drainOutbox } from '../services/outbox';
 import { replan } from '../services/planner';
@@ -120,12 +120,22 @@ export async function organizeOutcome(
     });
   }
 
-  const proposals = parsed.data.proposals.slice(0, input.maxTasks);
+  const proposalSet = isSimpleCommitmentRequest(input.outcome)
+    ? normalizeSimpleCommitment({
+        proposalSet: parsed.data,
+        outcome: input.outcome,
+        conversation: input.conversation,
+        timezone: env.APP_TIMEZONE,
+        defaultTravelMinutes:
+          domainContext.planningDefaults?.defaultTravelMinutes ?? 20,
+      })
+    : parsed.data;
+  const proposals = proposalSet.proposals.slice(0, input.maxTasks);
   validateProposalDependencies(proposals);
-  const assumptions = [...evidencePack.assumptions, ...parsed.data.assumptions];
-  const unknowns = [...evidencePack.unknowns, ...parsed.data.unknowns];
+  const assumptions = [...evidencePack.assumptions, ...proposalSet.assumptions];
+  const unknowns = [...evidencePack.unknowns, ...proposalSet.unknowns];
   const { accepted: acceptedEvidenceRefs, rejected: rejectedEvidenceRefs } =
-    reconcileEvidenceRefs(request.contextRefs, parsed.data.evidenceRefs);
+    reconcileEvidenceRefs(request.contextRefs, proposalSet.evidenceRefs);
   const evidenceRefs = [
     ...new Set([
       ...evidencePack.claims.map((claim) => claim.evidenceRef),
@@ -133,14 +143,14 @@ export async function organizeOutcome(
     ]),
   ];
   const verificationRequired = [
-    ...parsed.data.verificationRequired,
+    ...proposalSet.verificationRequired,
     ...rejectedEvidenceRefs.map(
       (ref) => `Riferimento non autorizzato rifiutato: ${ref}`,
     ),
   ];
   const blockingVerificationRequired =
     unknowns.length > 0 ||
-    parsed.data.verificationRequired.length > 0 ||
+    proposalSet.verificationRequired.length > 0 ||
     rejectedEvidenceRefs.length > 0;
   const trace = SpecialistTraceSchema.parse({
     request,
@@ -195,14 +205,14 @@ export async function organizeOutcome(
     ],
   });
   const storedProposal = StoredProposalSchema.parse({
-    ...parsed.data,
+    ...proposalSet,
     proposals,
     assumptions,
     unknowns,
     evidenceRefs,
     verificationRequired,
     sourceGaps: evidencePack.gaps,
-    clarifyingQuestion: parsed.data.clarifyingQuestion,
+    clarifyingQuestion: proposalSet.clarifyingQuestion,
     request,
     taskIds: proposals.map(() => crypto.randomUUID()),
     blockingVerificationRequired,
@@ -224,14 +234,14 @@ export async function organizeOutcome(
     plannerAgent: 'reality-planner' as const,
     evaluatorAgent: 'outcome-evaluator' as const,
     researchAgent: 'research-knowledge' as const,
-    summary: parsed.data.summary,
+    summary: proposalSet.summary,
     proposals,
     assumptions,
     unknowns,
     evidenceRefs,
     verificationRequired,
     sourceGaps: evidencePack.gaps,
-    clarifyingQuestion: parsed.data.clarifyingQuestion,
+    clarifyingQuestion: proposalSet.clarifyingQuestion,
     blockingVerificationRequired,
     expiresAt,
     actionsProposed: proposals.map((proposal) => proposal.title),
@@ -527,6 +537,214 @@ export function commitRequiresInput(
     outbox.dead > 0 ||
     outbox.failed > 0
   );
+}
+
+function isSimpleCommitmentRequest(outcome: string): boolean {
+  return (
+    /\b(pianifica|programma|metti|aggiungi|segna|plan|schedule)\b/i.test(outcome) &&
+    !/\b(organizza|prepara|ospit|invitati|lista della spesa|budget|host)\b/i.test(outcome)
+  );
+}
+
+export function normalizeSimpleCommitment(params: {
+  proposalSet: z.infer<typeof TaskProposalSetSchema>;
+  outcome: string;
+  conversation: Array<{ role: 'assistant' | 'user'; content: string }>;
+  timezone: string;
+  defaultTravelMinutes: number;
+}): z.infer<typeof TaskProposalSetSchema> {
+  const userAnswers = params.conversation
+    .filter((message) => message.role === 'user')
+    .map((message) => message.content);
+  const declarations = [params.outcome, ...userAnswers].join(' ');
+  const title = commitmentTitle(params.outcome);
+  const selected =
+    params.proposalSet.proposals.find((proposal) => proposal.fixedStartAt) ??
+    params.proposalSet.proposals.find((proposal) =>
+      proposal.title.toLocaleLowerCase('it-IT').includes(title.toLocaleLowerCase('it-IT')),
+    ) ??
+    params.proposalSet.proposals[0]!;
+
+  const hasDeclaredTime = hasTimeHint(declarations);
+  const fixedStartAt = hasDeclaredTime
+    ? deriveFixedStart(params.outcome, userAnswers, params.timezone)
+    : null;
+  const explicitLocation = hasLocationHint(params.outcome) || userAnswers.length >= 2;
+  const location = explicitLocation
+    ? extractLocation([...userAnswers, params.outcome].join(' '))
+    : null;
+  const durationConfirmed = hasDurationHint(declarations) || userAnswers.length >= 3;
+
+  let clarifyingQuestion: string | null = null;
+  let unknowns: string[] = [];
+  if (!fixedStartAt) {
+    clarifyingQuestion = 'A che ora devi essere lì?';
+    unknowns = [`Orario di inizio di ${title}`];
+  } else if (!location) {
+    clarifyingQuestion = 'Dove devi andare?';
+    unknowns = [`Luogo di ${title}`];
+  } else if (!durationConfirmed) {
+    clarifyingQuestion = 'Fino a che ora vuoi tenere libera la serata?';
+    unknowns = [`Durata o orario di fine di ${title}`];
+  }
+
+  const start = fixedStartAt ? Date.parse(fixedStartAt) : null;
+  const estimatedMinutes =
+    start && durationConfirmed
+      ? durationMinutesFromDeclarations(declarations, start, params.timezone) ??
+        selected.estimatedMinutes
+      : selected.estimatedMinutes;
+  const ready = Boolean(fixedStartAt && location && durationConfirmed);
+  const proposal: TaskProposal = {
+    ...selected,
+    title,
+    notes: ready
+      ? `Impegno personale confermato tramite conversazione con Dani.`
+      : `Bozza in attesa di: ${unknowns.join(', ')}.`,
+    area: 'personal',
+    energy: 'low',
+    estimatedMinutes,
+    dueDate: start ? localDateKey(start, params.timezone) : null,
+    fixedStartAt,
+    location,
+    travelMinutes: location ? params.defaultTravelMinutes : 0,
+    preparationMinutes: ready
+      ? selected.preparationMinutes > 0
+        ? selected.preparationMinutes
+        : 40
+      : 0,
+    recoveryMinutes: 0,
+    flexibility: fixedStartAt ? 'fixed' : 'high',
+    dependsOn: [],
+    evidence: ready
+      ? `Presenza a ${title} all'orario e nel luogo confermati.`
+      : `Confermare ${unknowns.join(', ')}.`,
+  };
+
+  return {
+    summary: ready
+      ? `${title} è pronto per la verifica del planner globale.`
+      : `Sto completando i dettagli necessari per pianificare ${title}.`,
+    proposals: [proposal],
+    assumptions: [],
+    unknowns,
+    evidenceRefs: [],
+    verificationRequired: [],
+    clarifyingQuestion,
+  };
+}
+
+function commitmentTitle(outcome: string): string {
+  const cleaned = outcome
+    .replace(/\b(oggi|domani|dopodomani)\b/gi, '')
+    .replace(/\b(pianifica|programma|metti|aggiungi|segna|plan|schedule)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return 'questo impegno';
+  return cleaned[0]!.toUpperCase() + cleaned.slice(1);
+}
+
+const ITALIAN_HOURS: Record<string, number> = {
+  una: 1,
+  due: 2,
+  tre: 3,
+  quattro: 4,
+  cinque: 5,
+  sei: 6,
+  sette: 7,
+  otto: 8,
+  nove: 9,
+  dieci: 10,
+  undici: 11,
+  dodici: 12,
+  tredici: 13,
+  quattordici: 14,
+  quindici: 15,
+  sedici: 16,
+  diciassette: 17,
+  diciotto: 18,
+  diciannove: 19,
+  venti: 20,
+  ventuno: 21,
+  ventidue: 22,
+  ventitré: 23,
+};
+
+function hasTimeHint(text: string): boolean {
+  return parseTimeMinutes(text) !== null;
+}
+
+function parseTimeMinutes(text: string): number | null {
+  const numeric = text.match(/(?:\balle?\b|\bore\b)\s*(\d{1,2})(?::(\d{2}))?/i) ??
+    text.match(/\b([01]?\d|2[0-3]):(\d{2})\b/);
+  if (numeric) {
+    let hour = Number(numeric[1]);
+    const minute = Number(numeric[2] ?? 0);
+    if (hour <= 11 && !/\b(mattina|am)\b/i.test(text)) hour += 12;
+    return hour * 60 + minute;
+  }
+  const words = Object.keys(ITALIAN_HOURS).join('|');
+  const wordMatch = text.match(new RegExp(`(?:\\balle?\\b|\\bore\\b)\\s*(${words})`, 'i'));
+  if (!wordMatch) return null;
+  let hour = ITALIAN_HOURS[wordMatch[1]!.toLocaleLowerCase('it-IT')]!;
+  if (hour <= 11 && !/\b(mattina)\b/i.test(text)) hour += 12;
+  return hour * 60;
+}
+
+function deriveFixedStart(
+  outcome: string,
+  userAnswers: string[],
+  timezone: string,
+): string | null {
+  const minutes = parseTimeMinutes([...userAnswers].reverse().join(' ')) ?? parseTimeMinutes(outcome);
+  if (minutes === null) return null;
+  const dayOffset = /\bdopodomani\b/i.test(outcome)
+    ? 2
+    : /\bdomani\b/i.test(outcome)
+      ? 1
+      : 0;
+  const timestamp = atLocalMinutes(addLocalDays(Date.now(), timezone, dayOffset), timezone, minutes);
+  return new Date(timestamp).toISOString();
+}
+
+function hasLocationHint(text: string): boolean {
+  return /\b(downtown|casa|giardino|parco|ristorante|locale|ufficio|universit[aà]|da [A-ZÀ-ÖØ-Ý])/i.test(
+    text,
+  );
+}
+
+function extractLocation(text: string): string | null {
+  const known = text.match(/\b(downtown|casa|giardino|parco|ristorante|locale|ufficio|universit[aà])\b/i);
+  if (known) return known[1]!;
+  const afterPreposition = text.match(/\b(?:al|alla|a|in|da)\s+([^,.!?]+)/i);
+  return afterPreposition?.[1]?.trim() || null;
+}
+
+function hasDurationHint(text: string): boolean {
+  return /\b(tutta la sera|fino (?:a|alle)|per \d+\s*(?:ore|h)|dura|finisce|termine)\b/i.test(text);
+}
+
+function durationMinutesFromDeclarations(
+  text: string,
+  start: number,
+  timezone: string,
+): number | null {
+  const hours = text.match(/\bper\s+(\d+)\s*(?:ore|h)\b/i);
+  if (hours) return Math.min(600, Math.max(30, Number(hours[1]) * 60));
+  if (/\btutta la sera\b/i.test(text)) {
+    const end = atLocalMinutes(start, timezone, 23 * 60);
+    return Math.min(600, Math.max(60, Math.round((end - start) / 60_000)));
+  }
+  const until = text.match(/\bfino (?:a|alle)\s+(.+)$/i);
+  if (until) {
+    const endMinutes = parseTimeMinutes(`alle ${until[1]}`);
+    if (endMinutes !== null) {
+      let end = atLocalMinutes(start, timezone, endMinutes);
+      if (end <= start) end = addLocalDays(end, timezone, 1);
+      return Math.min(600, Math.max(30, Math.round((end - start) / 60_000)));
+    }
+  }
+  return null;
 }
 
 async function buildCommitConfirmation(
