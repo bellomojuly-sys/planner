@@ -202,8 +202,18 @@ export interface OrganizedOutcome {
   domainAgent: 'university-context' | 'work-portfolio' | 'personal-admin';
   plannerAgent: 'reality-planner';
   evaluatorAgent: 'outcome-evaluator';
+  researchAgent: 'research-knowledge';
   summary: string;
   proposals: AgentTaskProposal[];
+  assumptions: string[];
+  unknowns: string[];
+  evidenceRefs: string[];
+  verificationRequired: string[];
+  trace: {
+    request: { requestId: string };
+    agents: string[];
+    status: 'completed' | 'input_required' | 'failed' | 'cancelled';
+  };
   committed: false;
 }
 

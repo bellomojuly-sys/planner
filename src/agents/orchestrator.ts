@@ -1,4 +1,4 @@
-import { and, desc, eq, ne } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { DB } from '../db/client';
 import { taskDependencies, tasks } from '../db/schema';
 import type { Env } from '../env';
@@ -12,12 +12,12 @@ import {
   CommitProposalInputSchema,
   OrganizeOutcomeInputSchema,
   TaskProposalSetSchema,
+  SpecialistRequestSchema,
+  SpecialistTraceSchema,
   type TaskProposal,
 } from './contracts';
-import {
-  DOMAIN_PROFILES,
-  selectDomainAgent,
-} from './registry';
+import { DOMAIN_PROFILES, selectDomainAgent } from './registry';
+import { buildDomainContext, DOMAIN_AGENT_INSTRUCTIONS } from './domain-context';
 
 export async function organizeOutcome(
   env: Env,
@@ -28,12 +28,26 @@ export async function organizeOutcome(
   const input = OrganizeOutcomeInputSchema.parse(rawInput);
   const domainAgent = selectDomainAgent(input.outcome, input.domain);
   const profile = DOMAIN_PROFILES[domainAgent];
-  const openTasks = await db
-    .select({ title: tasks.title, area: tasks.area, dueAt: tasks.dueAt })
-    .from(tasks)
-    .where(and(eq(tasks.userId, userId), ne(tasks.status, 'done')))
-    .orderBy(desc(tasks.updatedAt))
-    .limit(40);
+  const domainContext = await buildDomainContext(
+    db,
+    userId,
+    domainAgent,
+    input.outcome,
+  );
+  const evidencePack = domainContext.evidencePack;
+  const request = SpecialistRequestSchema.parse({
+    requestId: crypto.randomUUID(),
+    userGoal: input.outcome,
+    taskType: 'organize_outcome',
+    contextRefs: domainContext.sourceRefs,
+    allowedSources: ['d1', 'curated_profile'],
+    allowedCapabilities: DOMAIN_PROFILES[domainAgent].capabilities,
+    authority: 'propose',
+    privacyClass: 'personal',
+    expectedOutputSchema: 'TaskProposalSet',
+    acceptanceContract:
+      'Every proposal is observable, cites only allowed context, exposes unknowns, and leaves calendar placement to the Reality Planning Agent.',
+  });
 
   const today = localDateKey(Date.now(), env.APP_TIMEZONE);
   const content = await chat(env, `agent.${domainAgent}.organize`, {
@@ -42,14 +56,27 @@ export async function organizeOutcome(
     messages: [
       {
         role: 'system',
-        content: buildDomainPrompt(profile.context, profile.defaultArea, today, input.maxTasks),
+        content: buildDomainPrompt(
+          domainAgent,
+          DOMAIN_AGENT_INSTRUCTIONS[domainAgent],
+          profile.defaultArea,
+          today,
+          input.maxTasks,
+        ),
       },
       {
         role: 'user',
         content: JSON.stringify({
           outcome: input.outcome,
           constraints: input.constraints ?? null,
-          existingOpenTasks: openTasks,
+          request,
+          domainContext: {
+            projectFocus: domainContext.projectFocus,
+            curatedProfile: domainContext.curatedProfile,
+            operationalTasks: domainContext.operationalTasks,
+            retrieval: domainContext.retrieval,
+          },
+          evidencePack,
         }),
       },
     ],
@@ -77,14 +104,42 @@ export async function organizeOutcome(
 
   const proposals = parsed.data.proposals.slice(0, input.maxTasks);
   validateProposalDependencies(proposals);
+  const assumptions = [...evidencePack.assumptions, ...parsed.data.assumptions];
+  const unknowns = [...evidencePack.unknowns, ...parsed.data.unknowns];
+  const verificationRequired = [
+    ...evidencePack.gaps,
+    ...parsed.data.verificationRequired,
+  ];
+  const trace = SpecialistTraceSchema.parse({
+    request,
+    agents: [
+      'dani-supervisor',
+      'context-perception',
+      'research-knowledge',
+      domainAgent,
+      'outcome-evaluator',
+    ],
+    status: unknowns.length > 0 ? 'input_required' : 'completed',
+  });
   return {
     supervisor: 'dani-supervisor' as const,
     contextAgent: 'context-perception' as const,
     domainAgent,
     plannerAgent: 'reality-planner' as const,
     evaluatorAgent: 'outcome-evaluator' as const,
+    researchAgent: 'research-knowledge' as const,
     summary: parsed.data.summary,
     proposals,
+    assumptions,
+    unknowns,
+    evidenceRefs: [
+      ...new Set([
+        ...evidencePack.claims.map((claim) => claim.evidenceRef),
+        ...parsed.data.evidenceRefs,
+      ]),
+    ],
+    verificationRequired,
+    trace,
     committed: false,
   };
 }
@@ -97,6 +152,19 @@ export async function commitProposalSet(
 ) {
   const input = CommitProposalInputSchema.parse(rawInput);
   validateProposalDependencies(input.proposals);
+  const request = SpecialistRequestSchema.parse({
+    requestId: input.sourceRequestId ?? crypto.randomUUID(),
+    userGoal: input.summary ?? input.proposals.map((proposal) => proposal.title).join('; '),
+    taskType: 'commit_proposal_set',
+    contextRefs: [],
+    allowedSources: ['approved_proposal'],
+    allowedCapabilities: ['create_tasks', 'create_dependencies', 'request_replan'],
+    authority: 'change_with_confirmation',
+    privacyClass: 'personal',
+    expectedOutputSchema: 'CommitProposalResult',
+    acceptanceContract:
+      'Write only the explicitly approved proposal set, then run deterministic replanning and return the resulting diff.',
+  });
 
   const created = [];
   for (const proposal of input.proposals) {
@@ -145,6 +213,17 @@ export async function commitProposalSet(
 
   const diff = await replan(env, db, userId, 'manual');
   await drainOutbox(env, db);
+  const trace = SpecialistTraceSchema.parse({
+    request,
+    agents: [
+      'dani-supervisor',
+      input.domainAgent,
+      'execution-operator',
+      'reality-planner',
+      'outcome-evaluator',
+    ],
+    status: 'completed',
+  });
 
   return {
     supervisor: 'dani-supervisor' as const,
@@ -155,6 +234,7 @@ export async function commitProposalSet(
     committed: true,
     created: created.map((task) => ({ id: task.id, title: task.title })),
     diff,
+    trace,
   };
 }
 
@@ -178,15 +258,16 @@ function buildAgentNotes(domainAgent: string, proposal: TaskProposal): string | 
 }
 
 export function buildDomainPrompt(
-  context: string,
+  domainAgent: string,
+  instructions: string,
   defaultArea: string,
   today: string,
   maxTasks: number,
 ) {
-  return `Sei un agente di contesto interno a Dani. Non assegni orari: proponi attività strutturate al Reality Planning Agent globale.
+  return `Sei ${domainAgent}, un agente di contesto interno a Dani. Non assegni orari: proponi attività strutturate al Reality Planning Agent globale.
 
-CONTESTO AUTORIZZATO
-${context}
+ISTRUZIONI SPECIFICHE DEL RUOLO
+${instructions}
 
 REGOLE
 - Oggi è ${today}.
@@ -197,8 +278,10 @@ REGOLE
 - Le priorità vanno da 1 urgente a 4 differibile. Non rendere tutto urgente.
 - La durata è lavoro effettivo in minuti; viaggio e preparazione non vanno nascosti nella stima.
 - dependsOn contiene gli indici zero-based delle proposte precedenti da completare prima.
-- Non inserire orari di calendario. Non dichiarare fatti non presenti nell'outcome o nel contesto.
+- Non inserire orari di calendario. Non dichiarare fatti non presenti nell'outcome, nel domainContext o nell'evidencePack.
+- Usa solo i claim dell'evidencePack come fatti. Mantieni distinti assumptions, unknowns ed evidenceRefs.
+- Se manca una fonte necessaria, dichiarala in verificationRequired invece di colmare il vuoto.
 
 Rispondi solo con JSON:
-{"summary":"...","proposals":[{"title":"...","notes":"...","area":"general|mg|university|heemia|career|personal|health|errand","energy":"high|medium|low","priority":1,"estimatedMinutes":30,"dueDate":"YYYY-MM-DD oppure null","flexibility":"fixed|low|medium|high","dependsOn":[],"evidence":"criterio osservabile di completamento"}]}`;
+{"summary":"...","proposals":[{"title":"...","notes":"...","area":"general|mg|university|heemia|career|personal|health|errand","energy":"high|medium|low","priority":1,"estimatedMinutes":30,"dueDate":"YYYY-MM-DD oppure null","flexibility":"fixed|low|medium|high","dependsOn":[],"evidence":"criterio osservabile di completamento"}],"assumptions":[],"unknowns":[],"evidenceRefs":[],"verificationRequired":[]}`;
 }

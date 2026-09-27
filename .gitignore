@@ -3,6 +3,7 @@ web/dist/
 .wrangler/
 .dev.vars
 .dev.vars.*
+!.dev.vars.example
 *.log
 .DS_Store
 feeds.local.txt

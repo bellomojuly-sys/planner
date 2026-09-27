@@ -126,7 +126,7 @@ export const apiTokens = sqliteTable(
 /**
  * Third-party credentials, AES-GCM encrypted with MASTER_KEY before they ever
  * reach this table. The browser never sees these — every outbound call to
- * Notion, Google and Claude originates in the Worker.
+ * Notion, Google and the configured language model originates in the Worker.
  */
 export const credentials = sqliteTable(
   'credentials',
@@ -413,7 +413,7 @@ export const tasks = sqliteTable(
       .notNull()
       .default('high'),
 
-    /** What Claude (or Giulia) thinks it takes. */
+    /** What the model (or Giulia) thinks it takes. */
     estimatedMinutes: integer('estimated_minutes').notNull().default(30),
     /** Adjusted by the learned bias factor. What the scheduler actually books. */
     plannedMinutes: integer('planned_minutes').notNull().default(30),
@@ -731,7 +731,7 @@ export const captures = sqliteTable(
     })
       .notNull()
       .default('pending'),
-    /** Claude's parsed intents, kept for audit and for undo. */
+    /** The model's parsed intents, kept for audit and for undo. */
     interpretation: text('interpretation', { mode: 'json' }).$type<unknown>(),
     appliedSummary: text('applied_summary'),
     error: text('error'),

@@ -39,8 +39,8 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     name: 'Research and Knowledge Agent',
     role: 'core',
     transport: 'agent_as_tool',
-    implementation: 'curated domain profiles',
-    capabilities: ['retrieve_domain_profile', 'separate_fact_assumption_unknown'],
+    implementation: 'agents/research D1 evidence adapter',
+    capabilities: ['retrieve_d1_evidence', 'separate_fact_assumption_unknown', 'report_source_gaps'],
     a2aEligible: false,
     status: 'active',
   },
@@ -90,7 +90,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     role: 'domain',
     transport: 'agent_as_tool',
     implementation: 'agents/orchestrator domain profile',
-    capabilities: ['portfolio_context', 'decision_log_context', 'session_decomposition'],
+    capabilities: ['curated_project_profile', 'd1_task_context', 'session_decomposition'],
     a2aEligible: true,
     status: 'active',
   },
@@ -100,7 +100,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     role: 'domain',
     transport: 'agent_as_tool',
     implementation: 'agents/orchestrator domain profile',
-    capabilities: ['heemia_context', 'mg_dmg_context', 'cross_project_decomposition'],
+    capabilities: ['curated_project_profile', 'd1_task_context', 'cross_project_decomposition'],
     a2aEligible: true,
     status: 'active',
   },
@@ -110,7 +110,7 @@ export const AGENT_REGISTRY: readonly AgentDefinition[] = [
     role: 'domain',
     transport: 'agent_as_tool',
     implementation: 'agents/orchestrator domain profile',
-    capabilities: ['personal_admin_context', 'bureaucracy_decomposition', 'errand_preparation'],
+    capabilities: ['d1_task_context', 'bureaucracy_decomposition', 'errand_preparation'],
     a2aEligible: true,
     status: 'active',
   },
@@ -120,7 +120,7 @@ export interface DomainProfile {
   agentId: DomainAgentId;
   label: string;
   defaultArea: 'university' | 'heemia' | 'mg' | 'personal';
-  context: string;
+  capabilities: string[];
 }
 
 export const DOMAIN_PROFILES: Record<DomainAgentId, DomainProfile> = {
@@ -128,27 +128,24 @@ export const DOMAIN_PROFILES: Record<DomainAgentId, DomainProfile> = {
     agentId: 'university-context',
     label: 'Università',
     defaultArea: 'university',
-    context:
-      'Conosci il sistema universitario di Giulia: portfolio, Decision Log, evidenze e checkpoint con docenti. I progetti correnti sono Berzi, Dani e Amexio. Ogni task deve produrre un artefatto o una prova osservabile e conservare la relazione con il progetto, non soltanto il titolo.',
+    capabilities: ['curated_project_profile', 'd1_task_context', 'session_decomposition'],
   },
   'work-portfolio': {
     agentId: 'work-portfolio',
     label: 'Lavoro',
     defaultArea: 'heemia',
-    context:
-      'Coordini Heemia e MG/DMG come portfolio distinti. Per Heemia considera prodotto, inventario, integrazioni e operazioni. Per MG/DMG proteggi gate cliente, proposal, responsabilità, data onboarding e confini dei sistemi condivisi. Non inventare approvazioni o modifiche di produzione.',
+    capabilities: ['curated_project_profile', 'd1_task_context', 'cross_project_decomposition'],
   },
   'personal-admin': {
     agentId: 'personal-admin',
     label: 'Personale',
     defaultArea: 'personal',
-    context:
-      'Gestisci burocrazia, casa, appuntamenti, salute pratica ed errands. Separa preparazione, viaggio e azione effettiva quando consumano tempo reale. Non trasformare informazioni sensibili in note non necessarie.',
+    capabilities: ['d1_task_context', 'bureaucracy_decomposition', 'errand_preparation'],
   },
 };
 
-const UNIVERSITY_MARKERS = ['università', 'university', 'portfolio', 'berzi', 'amexio', 'professore', 'docente'];
-const WORK_MARKERS = ['heemia', 'mg', 'dmg', 'cliente', 'client', 'proposal', 'inventario', 'integration'];
+const UNIVERSITY_MARKERS = /\b(universit[aà]|university|portfolio|berzi|amexio|professore|docente)\b/i;
+const WORK_MARKERS = /\b(heemia|mg|dmg|cliente|client|proposal|inventario|integration)\b/i;
 
 export function selectDomainAgent(
   outcome: string,
@@ -158,11 +155,10 @@ export function selectDomainAgent(
   if (requested === 'work') return 'work-portfolio';
   if (requested === 'personal') return 'personal-admin';
 
-  const normalized = outcome.toLocaleLowerCase('it');
-  if (UNIVERSITY_MARKERS.some((marker) => normalized.includes(marker))) {
+  if (UNIVERSITY_MARKERS.test(outcome)) {
     return 'university-context';
   }
-  if (WORK_MARKERS.some((marker) => normalized.includes(marker))) {
+  if (WORK_MARKERS.test(outcome)) {
     return 'work-portfolio';
   }
   return 'personal-admin';

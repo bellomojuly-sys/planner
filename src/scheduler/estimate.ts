@@ -10,7 +10,7 @@ import {
 } from '../db/schema';
 
 /**
- * Closes the loop between "Claude thinks this takes 30 minutes" and how long
+ * Closes the loop between "the model thinks this takes 30 minutes" and how long
  * it actually takes Giulia.
  *
  * Every completed task contributes a ratio (actual / estimated) to one or more
@@ -71,7 +71,7 @@ export interface LearnedAdjustment {
 
 /**
  * Blends the buckets that have data, weighted by sample count. A brand-new
- * bucket contributes nothing, so an unseen kind of task keeps Claude's raw
+ * bucket contributes nothing, so an unseen kind of task keeps the model's raw
  * estimate rather than inheriting a stranger's bias.
  */
 export async function applyLearning(

@@ -32,6 +32,41 @@ export interface AgentDefinition {
   status: 'active';
 }
 
+export const SpecialistAuthoritySchema = z.enum([
+  'read',
+  'propose',
+  'draft',
+  'change_with_confirmation',
+  'autonomous_reversible',
+]);
+
+export const PrivacyClassSchema = z.enum([
+  'operational',
+  'personal',
+  'sensitive',
+]);
+
+export const SpecialistRequestSchema = z.object({
+  requestId: z.string().uuid(),
+  userGoal: z.string().min(3).max(4000),
+  taskType: z.string().min(1).max(120),
+  contextRefs: z.array(z.string().max(300)).max(100).default([]),
+  allowedSources: z.array(z.string().max(120)).max(20).default(['d1']),
+  allowedCapabilities: z.array(z.string().max(120)).max(30).default([]),
+  authority: SpecialistAuthoritySchema.default('propose'),
+  privacyClass: PrivacyClassSchema.default('personal'),
+  expectedOutputSchema: z.string().max(300),
+  acceptanceContract: z.string().min(1).max(1000),
+});
+
+export type SpecialistRequest = z.infer<typeof SpecialistRequestSchema>;
+
+export const SpecialistTraceSchema = z.object({
+  request: SpecialistRequestSchema,
+  agents: z.array(z.enum(AGENT_IDS)).min(1),
+  status: z.enum(['completed', 'input_required', 'failed', 'cancelled']),
+});
+
 export const TaskProposalSchema = z.object({
   title: z.string().min(1).max(300),
   notes: z.string().max(4000).default(''),
@@ -59,9 +94,14 @@ export const OrganizeOutcomeInputSchema = z.object({
 export const TaskProposalSetSchema = z.object({
   summary: z.string().min(1).max(1000),
   proposals: z.array(TaskProposalSchema).min(1).max(12),
+  assumptions: z.array(z.string().max(500)).max(20).default([]),
+  unknowns: z.array(z.string().max(500)).max(20).default([]),
+  evidenceRefs: z.array(z.string().max(300)).max(80).default([]),
+  verificationRequired: z.array(z.string().max(500)).max(20).default([]),
 });
 
 export const CommitProposalInputSchema = z.object({
+  sourceRequestId: z.string().uuid().optional(),
   domainAgent: z.enum([
     'university-context',
     'work-portfolio',

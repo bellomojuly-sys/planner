@@ -60,7 +60,7 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
       {notice && <div className="banner" data-tone="info">{notice}</div>}
 
       {!draft && (
-        <button
+              <button
           className="btn"
           data-variant="primary"
           disabled={busy || outcome.trim().length < 3}
@@ -90,6 +90,22 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
       {draft && (
         <div className="agent-proposal">
           <p>{draft.summary}</p>
+          {draft.unknowns.length > 0 && (
+            <div className="banner" data-tone="info">
+              <strong>Da chiarire:</strong> {draft.unknowns.join(' · ')}
+            </div>
+          )}
+          {draft.assumptions.length > 0 && (
+            <div className="banner" data-tone="info">
+              <strong>Assunzioni:</strong> {draft.assumptions.join(' · ')}
+            </div>
+          )}
+          {draft.verificationRequired.length > 0 && (
+            <div className="banner" data-tone="info">
+              <strong>Fonti o verifiche mancanti:</strong>{' '}
+              {draft.verificationRequired.join(' · ')}
+            </div>
+          )}
           <ol>
             {draft.proposals.map((proposal, index) => (
               <li key={`${proposal.title}-${index}`}>
@@ -109,12 +125,13 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
             <button
               className="btn"
               data-variant="primary"
-              disabled={busy}
+                disabled={busy || draft.trace.status === 'input_required'}
               onClick={async () => {
                 setBusy(true);
                 setError(null);
                 try {
                   await api.post('/agents/commit', {
+                    sourceRequestId: draft.trace.request.requestId,
                     domainAgent: draft.domainAgent,
                     summary: draft.summary,
                     proposals: draft.proposals,
@@ -131,7 +148,11 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
                 }
               }}
             >
-              {busy ? 'Pianifico…' : 'Inserisci e pianifica'}
+              {busy
+                ? 'Pianifico…'
+                : draft.trace.status === 'input_required'
+                  ? 'Chiarisci prima di inserire'
+                  : 'Inserisci e pianifica'}
             </button>
           </div>
         </div>

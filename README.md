@@ -20,7 +20,7 @@ iPhone (Action button)         PWA (iPhone / Mac)
    ┌──────────────────────────────────────────┐
    │        Cloudflare Worker (Hono)          │
    │                                          │
-   │  Claude ──► intents ──► tasks            │
+   │ DeepSeek ──► intents ──► tasks            │
    │                          │               │
    │                     scheduler            │
    │                    (energy bands,        │
@@ -33,7 +33,7 @@ iPhone (Action button)         PWA (iPhone / Mac)
          D1 (SQLite) · KV (cache)
 ```
 
-The Notion, Google and Claude keys live only in the Worker secrets. **The
+The Notion, Google and DeepSeek keys live only in the Worker secrets. **The
 browser never sees them**: every outbound call leaves from the server.
 
 ---
@@ -168,7 +168,8 @@ npx wrangler secret put VAPID_PRIVATE_KEY
 npx wrangler secret put VAPID_SUBJECT
 ```
 
-Locally, put them in `.dev.vars` instead (already in `.gitignore`).
+Locally, copy `.dev.vars.example` to `.dev.vars` and fill the real values. The
+local file is already ignored by Git; never commit it.
 
 ### 6. Deploy
 
@@ -241,7 +242,7 @@ blocking everything else.
 
 ### Estimates that improve
 
-Claude estimates duration, energy, priority and area. Every completed task
+DeepSeek estimates duration, energy, priority and area. Every completed task
 records the real time spent and feeds a correction factor per bucket (area,
 energy and keyword): if administrative work for MG systematically takes 1.6x the
 estimate, the planner starts reserving 48 minutes for a 30-minute estimate. The

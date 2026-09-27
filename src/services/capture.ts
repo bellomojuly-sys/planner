@@ -47,7 +47,7 @@ export type CaptureLanguage = Interpretation['language'];
 /**
  * The voice pipeline: interpret → apply → reschedule.
  *
- * Every utterance is stored (encrypted) alongside Claude's parsed intents
+ * Every utterance is stored (encrypted) alongside the model's parsed intents
  * before anything is written, so a bad interpretation can be inspected and
  * reversed rather than silently corrupting the plan.
  */
@@ -599,7 +599,7 @@ async function moveTask(
   }
 
   // Unpin: the scheduler should find the best slot on or after the new date,
-  // not the exact instant Claude guessed.
+  // not the exact instant the model guessed.
   await db
     .update(tasks)
     .set({ earliestStartAt: earliest, pinned: false })
