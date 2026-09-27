@@ -117,6 +117,7 @@ export async function replan(
     .returning({ id: scheduleRuns.id });
 
   try {
+    await purgeDisabledSourceBlocks(db, userId);
     const dataIssues = await loadPlanningDataIssues(db, userId, options.syncErrors);
     const dataWarnings = dataIssues.warnings;
     if (dataIssues.blocking.length > 0) {
@@ -319,6 +320,62 @@ async function loadSettings(
     timezone: user?.timezone ?? 'Europe/Rome',
     planningHorizonDays: prefs!.planningHorizonDays,
   };
+}
+
+/**
+ * Disabling a task source takes its work out of the plan: the scheduled blocks
+ * of its tasks are deleted locally and in Google, and the tasks drop back to the
+ * backlog. Pinned blocks are included — a pin cannot keep a task from a source
+ * Giulia has switched off. The task rows are kept (never deleted) so re-enabling
+ * the source can replan them. Runs before every replan and is idempotent: with
+ * no blocks from a disabled source it makes no change.
+ */
+async function purgeDisabledSourceBlocks(db: DB, userId: string): Promise<void> {
+  const disabledTasks = await db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .innerJoin(taskSources, eq(tasks.sourceId, taskSources.id))
+    .where(and(eq(tasks.userId, userId), eq(taskSources.enabled, false)));
+  if (disabledTasks.length === 0) return;
+
+  const taskIds = disabledTasks.map((task) => task.id);
+  const blocks = await db
+    .select()
+    .from(scheduledBlocks)
+    .where(
+      and(eq(scheduledBlocks.userId, userId), inArray(scheduledBlocks.taskId, taskIds)),
+    );
+
+  if (blocks.length > 0) {
+    const fallbackCalendar = await getPlannerCalendarId(db, userId);
+    for (const block of blocks) {
+      if (block.googleEventId) {
+        await db.insert(outbox).values({
+          userId,
+          kind: 'google_delete',
+          payload: {
+            eventId: block.googleEventId,
+            calendarId: block.calendarId ?? fallbackCalendar,
+          },
+        });
+      }
+    }
+    await db
+      .delete(scheduledBlocks)
+      .where(inArray(scheduledBlocks.id, blocks.map((block) => block.id)));
+  }
+
+  // Leave the backlog consistent so a later re-enable replans cleanly.
+  await db
+    .update(tasks)
+    .set({ status: 'todo' })
+    .where(
+      and(
+        eq(tasks.userId, userId),
+        inArray(tasks.id, taskIds),
+        eq(tasks.status, 'scheduled'),
+      ),
+    );
 }
 
 /**
