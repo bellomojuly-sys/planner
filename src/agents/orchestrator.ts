@@ -1,7 +1,7 @@
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq, gt } from 'drizzle-orm';
 import { z } from 'zod';
 import type { DB } from '../db/client';
-import { agentProposals, taskDependencies, tasks } from '../db/schema';
+import { agentProposals, scheduledBlocks, taskDependencies, tasks } from '../db/schema';
 import type { Env } from '../env';
 import { chat } from '../integrations/llm';
 import { PlannerError } from '../lib/errors';
@@ -50,8 +50,11 @@ export async function organizeOutcome(
     requestId: crypto.randomUUID(),
     userGoal: input.outcome,
     taskType: 'organize_outcome',
-    contextRefs: domainContext.sourceRefs,
-    allowedSources: ['d1', 'curated_profile'],
+    contextRefs: [
+      ...domainContext.sourceRefs,
+      ...input.conversation.map((_, index) => `user:conversation:${index + 1}`),
+    ],
+    allowedSources: ['d1', 'curated_profile', 'settings', 'user_input'],
     allowedCapabilities: DOMAIN_PROFILES[domainAgent].capabilities,
     authority: 'propose',
     privacyClass: domainAgent === 'university-context' ? 'personal' : 'sensitive',
@@ -80,6 +83,7 @@ export async function organizeOutcome(
         content: JSON.stringify({
           outcome: input.outcome,
           constraints: input.constraints ?? null,
+          conversation: input.conversation,
           request,
           domainContext: {
             projectFocus: domainContext.projectFocus,
@@ -87,6 +91,7 @@ export async function organizeOutcome(
             curatedProfile: domainContext.curatedProfile,
             curatedProfiles: domainContext.curatedProfiles,
             operationalTasks: domainContext.operationalTasks,
+            planningDefaults: domainContext.planningDefaults,
             retrieval: domainContext.retrieval,
           },
           evidencePack,
@@ -197,6 +202,7 @@ export async function organizeOutcome(
     evidenceRefs,
     verificationRequired,
     sourceGaps: evidencePack.gaps,
+    clarifyingQuestion: parsed.data.clarifyingQuestion,
     request,
     taskIds: proposals.map(() => crypto.randomUUID()),
     blockingVerificationRequired,
@@ -225,6 +231,7 @@ export async function organizeOutcome(
     evidenceRefs,
     verificationRequired,
     sourceGaps: evidencePack.gaps,
+    clarifyingQuestion: parsed.data.clarifyingQuestion,
     blockingVerificationRequired,
     expiresAt,
     actionsProposed: proposals.map((proposal) => proposal.title),
@@ -291,12 +298,19 @@ export async function commitProposalSet(
   if (!idempotentReplay) {
     const estimateRows = await loadEstimateModel(db, userId);
     const taskValues = approved.proposals.map((proposal, index) => {
-      const learned = blendLearning(estimateRows, {
-        area: proposal.area,
-        energy: proposal.energy,
-        title: proposal.title,
-        estimatedMinutes: proposal.estimatedMinutes,
-      });
+      const learned = proposal.fixedStartAt
+        ? {
+            plannedMinutes: proposal.estimatedMinutes,
+            factor: 1,
+            confidence: 1,
+            basis: [],
+          }
+        : blendLearning(estimateRows, {
+            area: proposal.area,
+            energy: proposal.energy,
+            title: proposal.title,
+            estimatedMinutes: proposal.estimatedMinutes,
+          });
       return {
         id: approved.taskIds[index]!,
         userId,
@@ -310,6 +324,11 @@ export async function commitProposalSet(
         estimateSource: 'claude' as const,
         estimateConfidence: learned.confidence,
         dueAt: proposal.dueDate ? Date.parse(`${proposal.dueDate}T18:00:00`) : null,
+        fixedStartAt: proposal.fixedStartAt ? Date.parse(proposal.fixedStartAt) : null,
+        location: proposal.location,
+        travelMinutes: proposal.travelMinutes,
+        preparationMinutes: proposal.preparationMinutes,
+        recoveryMinutes: proposal.recoveryMinutes,
         flexibility: proposal.flexibility,
         dirty: true,
       };
@@ -347,6 +366,13 @@ export async function commitProposalSet(
   const diff = await replan(env, db, userId, 'manual');
   const outbox = await drainOutbox(env, db);
   const requiresInput = commitRequiresInput(diff, outbox);
+  const confirmation = await buildCommitConfirmation(
+    db,
+    userId,
+    env.APP_TIMEZONE,
+    approved.proposals,
+    requiresInput,
+  );
   const request = SpecialistRequestSchema.parse({
     ...approved.request,
     taskType: 'commit_proposal_set',
@@ -430,6 +456,7 @@ export async function commitProposalSet(
     })),
     diff,
     outbox,
+    confirmation,
     actionsProposed: approved.proposals.map((proposal) => proposal.title),
     costAndLatency: {
       durationMs: Date.now() - startedAt,
@@ -502,6 +529,71 @@ export function commitRequiresInput(
   );
 }
 
+async function buildCommitConfirmation(
+  db: DB,
+  userId: string,
+  timezone: string,
+  proposals: TaskProposal[],
+  requiresInput: boolean,
+): Promise<string> {
+  const fixed = proposals.find((proposal) => proposal.fixedStartAt);
+  if (!fixed?.fixedStartAt) {
+    return requiresInput
+      ? `${proposals.length} attività inserite. Il planner richiede ancora una decisione.`
+      : `${proposals.length} attività inserite e pianificate.`;
+  }
+
+  const start = Date.parse(fixed.fixedStartAt);
+  const preparationStart =
+    start - (fixed.preparationMinutes + fixed.travelMinutes) * 60_000;
+  const eventEnd = start + fixed.estimatedMinutes * 60_000;
+  const [nextGym] = await db
+    .select({ title: scheduledBlocks.title, startAt: scheduledBlocks.startAt })
+    .from(scheduledBlocks)
+    .where(
+      and(
+        eq(scheduledBlocks.userId, userId),
+        eq(scheduledBlocks.kind, 'gym'),
+        gt(scheduledBlocks.startAt, eventEnd),
+      ),
+    )
+    .orderBy(asc(scheduledBlocks.startAt))
+    .limit(1);
+
+  const parts = [
+    `Ho pianificato ${fixed.title} dalle ${formatClock(start, timezone)}.`,
+  ];
+  if (fixed.preparationMinutes > 0 || fixed.travelMinutes > 0) {
+    parts.push(`Inizi a prepararti alle ${formatClock(preparationStart, timezone)}.`);
+  }
+  if (nextGym) {
+    parts.push(
+      `Cerca di non fare troppo tardi: ${nextGym.title} ti aspetta ${formatDateTime(nextGym.startAt, timezone)}.`,
+    );
+  }
+  if (requiresInput) {
+    parts.push('Il planner ha rilevato un punto che richiede ancora la tua conferma.');
+  }
+  return parts.join(' ');
+}
+
+function formatClock(timestamp: number, timezone: string): string {
+  return new Intl.DateTimeFormat('it-IT', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(timestamp);
+}
+
+function formatDateTime(timestamp: number, timezone: string): string {
+  return new Intl.DateTimeFormat('it-IT', {
+    timeZone: timezone,
+    weekday: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(timestamp);
+}
+
 export function buildDomainPrompt(
   domainAgent: string,
   instructions: string,
@@ -523,10 +615,13 @@ REGOLE
 - Le priorità vanno da 1 urgente a 4 differibile. Non rendere tutto urgente.
 - La durata è lavoro effettivo in minuti; viaggio e preparazione non vanno nascosti nella stima.
 - dependsOn contiene gli indici zero-based delle proposte precedenti da completare prima.
-- Non inserire orari di calendario. L'outcome descrive la richiesta dell'utente; usa come fatti di contesto solo i claim dell'evidencePack.
+- L'outcome e la conversazione sono dichiarazioni dell'utente. Per gli altri fatti di contesto usa soltanto i claim dell'evidencePack.
+- Se si tratta di un impegno a un orario preciso, compila fixedStartAt con data, ora e offset Europe/Rome; il planner resta responsabile di verificare conflitti e collocazione.
+- Se mancano orario, luogo, durata, viaggio o preparazione necessari per pianificare correttamente, aggiungi l'elemento a unknowns e formula una sola domanda diretta in clarifyingQuestion. Non fare più domande insieme.
+- Quando la conversazione contiene la risposta, aggiorna la proposta e chiedi soltanto il prossimo dato ancora indispensabile. Se non manca nulla, clarifyingQuestion deve essere null.
 - Mantieni distinti assumptions, unknowns ed evidenceRefs e cita soltanto gli evidenceRef presenti nella richiesta.
 - Se manca una fonte necessaria, dichiarala in verificationRequired invece di colmare il vuoto.
 
 Rispondi solo con JSON:
-{"summary":"...","proposals":[{"title":"...","notes":"...","area":"general|mg|university|heemia|career|personal|health|errand","energy":"high|medium|low","priority":1,"estimatedMinutes":30,"dueDate":"YYYY-MM-DD oppure null","flexibility":"fixed|low|medium|high","dependsOn":[],"evidence":"criterio osservabile di completamento"}],"assumptions":[],"unknowns":[],"evidenceRefs":[],"verificationRequired":[]}`;
+{"summary":"...","proposals":[{"title":"...","notes":"...","area":"general|mg|university|heemia|career|personal|health|errand","energy":"high|medium|low","priority":1,"estimatedMinutes":30,"dueDate":"YYYY-MM-DD oppure null","fixedStartAt":"ISO 8601 con offset oppure null","location":"luogo oppure null","travelMinutes":0,"preparationMinutes":0,"recoveryMinutes":0,"flexibility":"fixed|low|medium|high","dependsOn":[],"evidence":"criterio osservabile di completamento"}],"assumptions":[],"unknowns":[],"evidenceRefs":[],"verificationRequired":[],"clarifyingQuestion":"una domanda oppure null"}`;
 }

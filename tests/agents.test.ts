@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AGENT_IDS,
   CommitProposalInputSchema,
+  OrganizeOutcomeInputSchema,
   SpecialistTraceSchema,
   TaskProposalSetSchema,
 } from '../src/agents/contracts';
@@ -155,6 +156,50 @@ describe('agent foundation', () => {
     ).toBe(true);
   });
 
+  it('carries a bounded multi-turn conversation into the organizer', () => {
+    const parsed = OrganizeOutcomeInputSchema.parse({
+      outcome: 'Domani pianifica barbecue',
+      conversation: [
+        { role: 'assistant', content: 'A che ora?' },
+        { role: 'user', content: 'Alle sei circa.' },
+      ],
+    });
+    expect(parsed.conversation).toHaveLength(2);
+    expect(parsed.maxTasks).toBe(8);
+  });
+
+  it('accepts an exact commitment with preparation and travel', () => {
+    const parsed = TaskProposalSetSchema.parse({
+      summary: 'Barbecue pianificabile',
+      proposals: [
+        {
+          title: 'Barbecue',
+          notes: '',
+          area: 'personal',
+          energy: 'low',
+          priority: 3,
+          estimatedMinutes: 180,
+          dueDate: '2026-09-28',
+          fixedStartAt: '2026-09-28T18:00:00+02:00',
+          location: 'Downtown',
+          travelMinutes: 20,
+          preparationMinutes: 20,
+          recoveryMinutes: 0,
+          flexibility: 'fixed',
+          dependsOn: [],
+          evidence: 'Presenza al barbecue alle 18:00',
+        },
+      ],
+      clarifyingQuestion: null,
+    });
+    expect(parsed.proposals[0]).toMatchObject({
+      fixedStartAt: '2026-09-28T18:00:00+02:00',
+      location: 'Downtown',
+      travelMinutes: 20,
+      preparationMinutes: 20,
+    });
+  });
+
   it('keeps calendar placement outside the domain-agent prompt', () => {
     const prompt = buildDomainPrompt(
       'university-context',
@@ -168,6 +213,8 @@ describe('agent foundation', () => {
     expect(prompt).toContain('massimo 6 attività');
     expect(prompt).toContain('assumptions');
     expect(prompt).toContain('verificationRequired');
+    expect(prompt).toContain('clarifyingQuestion');
+    expect(prompt).toContain('fixedStartAt');
   });
 
   it('gives each domain agent distinct instructions', () => {

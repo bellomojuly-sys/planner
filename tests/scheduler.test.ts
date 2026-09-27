@@ -1034,6 +1034,69 @@ describe('pinned work', () => {
   });
 });
 
+describe('fixed task commitments', () => {
+  it('places the confirmed activity exactly and reserves preparation and travel before it', () => {
+    const fixedStart = Date.parse('2026-01-13T17:00:00Z'); // 18:00 Rome
+    const result = run([
+      task({
+        id: 'barbecue',
+        title: 'Barbecue downtown',
+        fixedStartAt: fixedStart,
+        plannedMinutes: 180,
+        preparationMinutes: 20,
+        travelMinutes: 20,
+        location: 'Downtown',
+        flexibility: 'fixed',
+      }),
+      task({ id: 'other', plannedMinutes: 60 }),
+    ]);
+
+    const barbecue = result.blocks.find(
+      (block) => block.taskId === 'barbecue' && block.kind === 'task',
+    )!;
+    expect(barbecue.start).toBe(fixedStart);
+    expect(barbecue.end).toBe(fixedStart + 180 * 60_000);
+    expect(
+      result.blocks.find((block) => block.title === 'Preparazione · Barbecue downtown'),
+    ).toMatchObject({
+      start: fixedStart - 40 * 60_000,
+      end: fixedStart - 20 * 60_000,
+      kind: 'buffer',
+    });
+    expect(result.blocks.find((block) => block.title === 'Viaggio verso Downtown')).toMatchObject({
+      start: fixedStart - 20 * 60_000,
+      end: fixedStart,
+      kind: 'buffer',
+    });
+
+    const other = result.blocks.find((block) => block.taskId === 'other')!;
+    expect(
+      other.start < barbecue.end && fixedStart - 40 * 60_000 < other.end,
+    ).toBe(false);
+  });
+
+  it('surfaces a conflict instead of moving an explicitly fixed commitment', () => {
+    const fixedStart = Date.parse('2026-01-13T17:00:00Z');
+    const result = run(
+      [
+        task({
+          id: 'barbecue',
+          fixedStartAt: fixedStart,
+          flexibility: 'fixed',
+        }),
+      ],
+      {
+        busy: [{ start: fixedStart - 10 * 60_000, end: fixedStart + 30 * 60_000 }],
+      },
+    );
+
+    expect(result.blocks.some((block) => block.taskId === 'barbecue')).toBe(false);
+    expect(result.unplaced).toContainEqual(
+      expect.objectContaining({ taskId: 'barbecue', reason: 'no_free_time' }),
+    );
+  });
+});
+
 describe('rescheduling when a fixed commitment moves', () => {
   // Wednesday 07:00 Rome, the first day of the shift week.
   const WEDNESDAY = MONDAY + 2 * 86_400_000;

@@ -43,6 +43,7 @@ export interface SchedulableTask {
   priority: number;
   plannedMinutes: number;
   dueAt: number | null;
+  fixedStartAt?: number | null;
   earliestStartAt: number | null;
   splittable: boolean;
   pinned: boolean;

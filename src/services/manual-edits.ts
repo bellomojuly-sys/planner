@@ -246,6 +246,12 @@ export async function editPlannerBlock(
 
   const delta = patch.start - block.startAt;
   const title = patch.title.trim() || block.title;
+  const task = block.taskId
+    ? await db.query.tasks.findFirst({
+        where: and(eq(tasks.id, block.taskId), eq(tasks.userId, userId)),
+      })
+    : null;
+  const fixedTask = Boolean(task?.fixedStartAt);
 
   const siblings = block.taskId
     ? await db
@@ -268,9 +274,17 @@ export async function editPlannerBlock(
     const isEdited = part.id === block.id;
     const updated = {
       title: isEdited ? title : part.title,
-      // Task siblings keep their own times; gym parts travel with the workout.
-      startAt: isEdited ? patch.start : gymParts ? part.startAt + delta : part.startAt,
-      endAt: isEdited ? patch.end : gymParts ? part.endAt + delta : part.endAt,
+      // A fixed commitment moves together with its preparation/travel buffers.
+      startAt: isEdited
+        ? patch.start
+        : gymParts || fixedTask
+          ? part.startAt + delta
+          : part.startAt,
+      endAt: isEdited
+        ? patch.end
+        : gymParts || fixedTask
+          ? part.endAt + delta
+          : part.endAt,
       pinned: true,
       syncState: 'pending' as const,
     };
@@ -281,7 +295,10 @@ export async function editPlannerBlock(
   if (block.taskId) {
     await db
       .update(tasks)
-      .set({ pinned: true })
+      .set({
+        pinned: true,
+        ...(fixedTask ? { fixedStartAt: patch.start } : {}),
+      })
       .where(and(eq(tasks.id, block.taskId), eq(tasks.userId, userId)));
   }
 }

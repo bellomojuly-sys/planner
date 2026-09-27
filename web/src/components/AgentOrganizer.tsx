@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react';
-import { api, ApiError, type AgentRegistryView, type OrganizedOutcome } from '../lib/api';
+import {
+  api,
+  ApiError,
+  type AgentCommitResult,
+  type AgentRegistryView,
+  type OrganizedOutcome,
+} from '../lib/api';
 
 export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
   const [registry, setRegistry] = useState<AgentRegistryView | null>(null);
@@ -7,6 +13,11 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
   const [outcome, setOutcome] = useState('');
   const [constraints, setConstraints] = useState('');
   const [draft, setDraft] = useState<OrganizedOutcome | null>(null);
+  const [conversation, setConversation] = useState<Array<{
+    role: 'assistant' | 'user';
+    content: string;
+  }>>([]);
+  const [reply, setReply] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -14,6 +25,28 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
   useEffect(() => {
     void api.get<AgentRegistryView>('/agents').then(({ data }) => setRegistry(data));
   }, []);
+
+  async function requestProposal(
+    messages: Array<{ role: 'assistant' | 'user'; content: string }>,
+  ) {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const { data } = await api.post<OrganizedOutcome>('/agents/organize', {
+        outcome,
+        domain,
+        constraints: constraints || undefined,
+        conversation: messages,
+        maxTasks: 8,
+      });
+      setDraft(data);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Non sono riuscita a organizzarlo.');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="card agent-organizer">
@@ -69,24 +102,7 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
           className="btn"
           data-variant="primary"
           disabled={busy || outcome.trim().length < 3}
-          onClick={async () => {
-            setBusy(true);
-            setError(null);
-            setNotice(null);
-            try {
-              const { data } = await api.post<OrganizedOutcome>('/agents/organize', {
-                outcome,
-                domain,
-                constraints: constraints || undefined,
-                maxTasks: 8,
-              });
-              setDraft(data);
-            } catch (err) {
-              setError(err instanceof ApiError ? err.message : 'Non sono riuscita a organizzarlo.');
-            } finally {
-              setBusy(false);
-            }
-          }}
+          onClick={() => void requestProposal(conversation)}
         >
           {busy ? 'Gli agenti stanno organizzando…' : 'Proponi le attività'}
         </button>
@@ -117,6 +133,55 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
               {draft.sourceGaps.join(' · ')}
             </div>
           )}
+          {draft.blockingVerificationRequired && draft.clarifyingQuestion && (
+            <div className="agent-conversation">
+              {conversation.map((message, index) => (
+                <p key={`${message.role}-${index}`} data-role={message.role}>
+                  <strong>{message.role === 'assistant' ? 'Dani' : 'Tu'}:</strong>{' '}
+                  {message.content}
+                </p>
+              ))}
+              <p data-role="assistant">
+                <strong>Dani:</strong> {draft.clarifyingQuestion}
+              </p>
+              <div className="row">
+                <input
+                  value={reply}
+                  placeholder="Rispondi a Dani"
+                  onChange={(event) => setReply(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' || !reply.trim() || busy) return;
+                    event.preventDefault();
+                    const next = [
+                      ...conversation,
+                      { role: 'assistant' as const, content: draft.clarifyingQuestion! },
+                      { role: 'user' as const, content: reply.trim() },
+                    ];
+                    setConversation(next);
+                    setReply('');
+                    void requestProposal(next);
+                  }}
+                />
+                <button
+                  className="btn"
+                  data-variant="primary"
+                  disabled={busy || !reply.trim()}
+                  onClick={() => {
+                    const next = [
+                      ...conversation,
+                      { role: 'assistant' as const, content: draft.clarifyingQuestion! },
+                      { role: 'user' as const, content: reply.trim() },
+                    ];
+                    setConversation(next);
+                    setReply('');
+                    void requestProposal(next);
+                  }}
+                >
+                  {busy ? 'Capisco…' : 'Rispondi'}
+                </button>
+              </div>
+            </div>
+          )}
           <details>
             <summary>Come Dani ha costruito la proposta</summary>
             <ol>
@@ -138,13 +203,36 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
                 <span>
                   {proposal.estimatedMinutes} min · P{proposal.priority} · {proposal.area}
                   {proposal.dueDate && ` · entro ${proposal.dueDate}`}
+                  {proposal.fixedStartAt &&
+                    ` · ${new Date(proposal.fixedStartAt).toLocaleString('it-IT', {
+                      dateStyle: 'short',
+                      timeStyle: 'short',
+                    })}`}
+                  {proposal.location && ` · ${proposal.location}`}
                 </span>
+                {(proposal.preparationMinutes > 0 || proposal.travelMinutes > 0) && (
+                  <small>
+                    {proposal.preparationMinutes > 0 &&
+                      `Preparazione ${proposal.preparationMinutes} min`}
+                    {proposal.preparationMinutes > 0 && proposal.travelMinutes > 0 && ' · '}
+                    {proposal.travelMinutes > 0 && `Viaggio ${proposal.travelMinutes} min`}
+                  </small>
+                )}
                 {proposal.evidence && <small>Fatto quando: {proposal.evidence}</small>}
               </li>
             ))}
           </ol>
           <div className="row">
-            <button className="btn" data-variant="quiet" disabled={busy} onClick={() => setDraft(null)}>
+            <button
+              className="btn"
+              data-variant="quiet"
+              disabled={busy}
+              onClick={() => {
+                setDraft(null);
+                setConversation([]);
+                setReply('');
+              }}
+            >
               Modifica richiesta
             </button>
             <button
@@ -155,13 +243,15 @@ export function AgentOrganizer({ onCommitted }: { onCommitted: () => void }) {
                 setBusy(true);
                 setError(null);
                 try {
-                  await api.post('/agents/commit', {
+                  const { data } = await api.post<AgentCommitResult>('/agents/commit', {
                     sourceRequestId: draft.trace.request.requestId,
                   });
-                  setNotice(`${draft.proposals.length} attività inserite e passate al planner.`);
+                  setNotice(data.confirmation);
                   setDraft(null);
                   setOutcome('');
                   setConstraints('');
+                  setConversation([]);
+                  setReply('');
                   onCommitted();
                 } catch (err) {
                   setError(err instanceof ApiError ? err.message : 'Non sono riuscita a inserirle.');

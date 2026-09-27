@@ -86,6 +86,11 @@ export const TaskProposalSchema = z.object({
   priority: z.number().int().min(1).max(4).default(3),
   estimatedMinutes: z.number().int().min(5).max(600),
   dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().default(null),
+  fixedStartAt: z.string().datetime({ offset: true }).nullable().default(null),
+  location: z.string().max(300).nullable().default(null),
+  travelMinutes: z.number().int().min(0).max(240).default(0),
+  preparationMinutes: z.number().int().min(0).max(240).default(0),
+  recoveryMinutes: z.number().int().min(0).max(240).default(0),
   flexibility: z.enum(['fixed', 'low', 'medium', 'high']).default('high'),
   dependsOn: z.array(z.number().int().min(0).max(11)).max(6).default([]),
   evidence: z.string().max(800).default(''),
@@ -99,6 +104,12 @@ export const OrganizeOutcomeInputSchema = z.object({
     .enum(['auto', 'university', 'work', 'personal'])
     .default('auto'),
   constraints: z.string().max(2000).optional(),
+  conversation: z.array(
+    z.object({
+      role: z.enum(['assistant', 'user']),
+      content: z.string().min(1).max(1000),
+    }),
+  ).max(12).default([]),
   maxTasks: z.number().int().min(1).max(12).default(8),
 });
 
@@ -109,6 +120,7 @@ export const TaskProposalSetSchema = z.object({
   unknowns: z.array(z.string().max(500)).max(20).default([]),
   evidenceRefs: z.array(z.string().max(300)).max(80).default([]),
   verificationRequired: z.array(z.string().max(500)).max(20).default([]),
+  clarifyingQuestion: z.string().min(1).max(500).nullable().default(null),
 });
 
 export const CommitProposalInputSchema = z.object({

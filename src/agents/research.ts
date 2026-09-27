@@ -12,7 +12,7 @@ export interface OperationalContextTask {
 export interface EvidenceClaim {
   claim: string;
   evidenceRef: string;
-  source: 'd1' | 'curated_profile';
+  source: 'd1' | 'curated_profile' | 'settings';
 }
 
 export interface EvidencePack {

@@ -192,6 +192,11 @@ export interface AgentTaskProposal {
   priority: number;
   estimatedMinutes: number;
   dueDate: string | null;
+  fixedStartAt: string | null;
+  location: string | null;
+  travelMinutes: number;
+  preparationMinutes: number;
+  recoveryMinutes: number;
   flexibility: 'fixed' | 'low' | 'medium' | 'high';
   dependsOn: number[];
   evidence: string;
@@ -211,6 +216,7 @@ export interface OrganizedOutcome {
   evidenceRefs: string[];
   verificationRequired: string[];
   sourceGaps: string[];
+  clarifyingQuestion: string | null;
   blockingVerificationRequired: boolean;
   expiresAt: number;
   actionsProposed: string[];
@@ -232,6 +238,19 @@ export interface OrganizedOutcome {
     }>;
   };
   committed: false;
+}
+
+export interface AgentCommitResult {
+  committed: true;
+  confirmation: string;
+  trace: OrganizedOutcome['trace'];
+  diff: {
+    applied: boolean;
+    requiresConfirmation: boolean;
+    blockedByStaleData: boolean;
+    unplaced: Array<{ title: string; reason: string; outcome: string }>;
+    warnings: string[];
+  };
 }
 
 export interface ShoppingItemView {

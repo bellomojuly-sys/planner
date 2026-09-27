@@ -427,6 +427,8 @@ export const tasks = sqliteTable(
     estimateConfidence: real('estimate_confidence').notNull().default(0.5),
 
     dueAt: integer('due_at'),
+    /** Exact start explicitly confirmed for a commitment or appointment. */
+    fixedStartAt: integer('fixed_start_at'),
     /** Not workable before this instant, e.g. a blocked phase. */
     earliestStartAt: integer('earliest_start_at'),
     completedAt: integer('completed_at'),

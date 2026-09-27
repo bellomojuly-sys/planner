@@ -511,6 +511,7 @@ async function loadSchedulableTasks(
         priority: t.priority,
         plannedMinutes: t.plannedMinutes,
         dueAt: t.dueAt,
+        fixedStartAt: t.fixedStartAt,
         earliestStartAt: t.earliestStartAt,
         splittable: t.splittable,
         pinned: t.pinned,
@@ -1094,7 +1095,11 @@ export async function moveBlock(
   // shift on the next pass.
   await db
     .update(tasks)
-    .set({ pinned: true, earliestStartAt: earliest })
+    .set({
+      pinned: true,
+      earliestStartAt: earliest,
+      ...(task?.fixedStartAt ? { fixedStartAt: newStart } : {}),
+    })
     .where(eq(tasks.id, block.taskId));
 
   const diff = await replan(env, db, userId, 'task_moved', { confirmed: true });
@@ -1203,7 +1208,11 @@ export async function applyPlannerCalendarMoves(
 
     await db
       .update(tasks)
-      .set({ pinned: true, earliestStartAt: earliest })
+      .set({
+        pinned: true,
+        earliestStartAt: earliest,
+        ...(task.fixedStartAt ? { fixedStartAt: move.start } : {}),
+      })
       .where(and(eq(tasks.id, block.taskId), eq(tasks.userId, userId)));
     if (!task.pinned) temporaryTaskIds.add(block.taskId);
   }
@@ -1263,7 +1272,7 @@ export async function unpinBlock(
 
   await db
     .update(tasks)
-    .set({ pinned: false, earliestStartAt: null })
+    .set({ pinned: false, earliestStartAt: null, fixedStartAt: null })
     .where(eq(tasks.id, block.taskId));
 
   return replan(env, db, userId, 'manual');

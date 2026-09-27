@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, like, notInArray, or } from 'drizzle-orm';
 import type { DB } from '../db/client';
-import { tasks } from '../db/schema';
+import { settings, tasks } from '../db/schema';
 import type { DomainAgentId } from './contracts';
 import {
   buildEvidencePack,
@@ -78,6 +78,11 @@ export interface DomainContext {
   operationalTasks: OperationalContextTask[];
   evidencePack: EvidencePack;
   sourceRefs: string[];
+  planningDefaults: {
+    defaultTravelMinutes: number;
+    travelMode: string;
+    travelBufferMinutes: number;
+  } | null;
   retrieval: {
     queried: number;
     retained: number;
@@ -103,26 +108,29 @@ export async function buildDomainContext(
         ]),
       )
     : undefined;
-  const rows = await db
-    .select({
-      id: tasks.id,
-      title: tasks.title,
-      area: tasks.area,
-      status: tasks.status,
-      dueAt: tasks.dueAt,
-      projectKey: tasks.projectKey,
-    })
-    .from(tasks)
-    .where(
-      and(
-        eq(tasks.userId, userId),
-        notInArray(tasks.status, ['done', 'cancelled']),
-        inArray(tasks.area, domainAreas),
-        projectCondition,
-      ),
-    )
-    .orderBy(desc(tasks.updatedAt))
-    .limit(limit);
+  const [rows, planningSettings] = await Promise.all([
+    db
+      .select({
+        id: tasks.id,
+        title: tasks.title,
+        area: tasks.area,
+        status: tasks.status,
+        dueAt: tasks.dueAt,
+        projectKey: tasks.projectKey,
+      })
+      .from(tasks)
+      .where(
+        and(
+          eq(tasks.userId, userId),
+          notInArray(tasks.status, ['done', 'cancelled']),
+          inArray(tasks.area, domainAreas),
+          projectCondition,
+        ),
+      )
+      .orderBy(desc(tasks.updatedAt))
+      .limit(limit),
+    db.query.settings.findFirst({ where: eq(settings.userId, userId) }),
+  ]);
 
   const domainRows = rows.filter((task) => belongsToDomain(task, domainAgent));
   const operationalTasks = projectFocuses.length > 0
@@ -150,6 +158,15 @@ export async function buildDomainContext(
         source: 'curated_profile' as const,
       }))),
       ...operationalEvidencePack.claims,
+      ...(planningSettings
+        ? [
+            {
+              claim: `Default travel is ${planningSettings.defaultTravelMinutes} minutes by ${planningSettings.travelMode}, plus ${planningSettings.travelBufferMinutes} buffer minutes when applicable.`,
+              evidenceRef: 'settings:travel-defaults',
+              source: 'settings' as const,
+            },
+          ]
+        : []),
     ],
   };
   const sourceRefs = [
@@ -168,6 +185,13 @@ export async function buildDomainContext(
     operationalTasks,
     evidencePack,
     sourceRefs,
+    planningDefaults: planningSettings
+      ? {
+          defaultTravelMinutes: planningSettings.defaultTravelMinutes,
+          travelMode: planningSettings.travelMode,
+          travelBufferMinutes: planningSettings.travelBufferMinutes,
+        }
+      : null,
     retrieval: { queried: rows.length, retained: operationalTasks.length, limit },
   };
 }

@@ -108,9 +108,25 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   const pinned = futurePinned.filter(
     (block) => !block.taskId || !conflictTaskIds.has(block.taskId),
   );
+  const fixed = placeFixedTasks({
+    tasks: input.tasks,
+    busy: [
+      ...input.busy,
+      ...pinned.map((block) => ({ start: block.start, end: block.end })),
+    ],
+    now,
+    horizonEnd,
+    timezone,
+  });
+  unplaced.push(...fixed.unplaced);
+  warnings.push(...fixed.warnings);
+  for (const [taskId, end] of fixed.taskEnd) {
+    taskEnd.set(taskId, end);
+  }
   const busy = [
     ...input.busy,
     ...pinned.map((b) => ({ start: b.start, end: b.end })),
+    ...fixed.reservations,
   ];
 
   for (const block of pinned) {
@@ -129,7 +145,7 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     }),
   );
 
-  const blocks: PlacedBlock[] = [...pinned];
+  const blocks: PlacedBlock[] = [...pinned, ...fixed.blocks];
   const breakMs = settings.breakMinutes * MINUTE_MS;
 
   // A day with a shift has less room for anything else, whatever its free
@@ -200,7 +216,11 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   // Tasks, in dependency order.
   // -------------------------------------------------------------------------
   const open = input.tasks.filter(
-    (t) => !t.pinned && t.status !== 'done' && t.status !== 'cancelled',
+    (t) =>
+      !t.pinned &&
+      !t.fixedStartAt &&
+      t.status !== 'done' &&
+      t.status !== 'cancelled',
   );
 
   // The same title twice in the same area is almost always a copy — a Notion
@@ -307,7 +327,7 @@ export function schedule(input: ScheduleInput): ScheduleResult {
   });
   const briefing = buildDecisionBriefing({
     decisions,
-    fixedCommitments: input.busy.length,
+    fixedCommitments: input.busy.length + fixed.placedTasks,
   });
   return {
     blocks,
@@ -317,6 +337,146 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     fixedCommitments: input.busy.length,
     taskEnd,
     warnings,
+  };
+}
+
+function placeFixedTasks(params: {
+  tasks: SchedulableTask[];
+  busy: Array<{ start: number; end: number }>;
+  now: number;
+  horizonEnd: number;
+  timezone: string;
+}): {
+  blocks: PlacedBlock[];
+  reservations: Array<{ start: number; end: number }>;
+  unplaced: UnplacedTask[];
+  warnings: string[];
+  taskEnd: Map<string, number>;
+  placedTasks: number;
+} {
+  const blocks: PlacedBlock[] = [];
+  const reservations: Array<{ start: number; end: number }> = [];
+  const unplaced: UnplacedTask[] = [];
+  const warnings: string[] = [];
+  const taskEnd = new Map<string, number>();
+  const occupied = [...params.busy];
+  let placedTasks = 0;
+
+  const fixedTasks = params.tasks
+    .filter(
+      (task) =>
+        task.fixedStartAt &&
+        !task.pinned &&
+        task.status !== 'done' &&
+        task.status !== 'cancelled',
+    )
+    .sort((a, b) => a.fixedStartAt! - b.fixedStartAt!);
+
+  for (const task of fixedTasks) {
+    const activityStart = task.fixedStartAt!;
+    const activityEnd = activityStart + task.plannedMinutes * MINUTE_MS;
+    const preparationStart =
+      activityStart -
+      ((task.preparationMinutes ?? 0) + (task.travelMinutes ?? 0)) * MINUTE_MS;
+    const reservationEnd = activityEnd + (task.recoveryMinutes ?? 0) * MINUTE_MS;
+
+    if (preparationStart < params.now || reservationEnd > params.horizonEnd) {
+      unplaced.push({
+        taskId: task.id,
+        title: task.title,
+        reason: 'past_due_window',
+        detail: 'L’orario fisso o la sua preparazione sono fuori dall’orizzonte pianificabile.',
+      });
+      continue;
+    }
+    if (
+      occupied.some((interval) =>
+        overlaps(preparationStart, reservationEnd, interval.start, interval.end),
+      )
+    ) {
+      unplaced.push({
+        taskId: task.id,
+        title: task.title,
+        reason: 'no_free_time',
+        detail: 'L’impegno fisso, il viaggio o la preparazione si sovrappongono a un altro impegno.',
+      });
+      warnings.push(`“${task.title}” ha un conflitto nell’orario fisso richiesto.`);
+      continue;
+    }
+
+    let cursor = preparationStart;
+    if ((task.preparationMinutes ?? 0) > 0) {
+      const end = cursor + task.preparationMinutes! * MINUTE_MS;
+      blocks.push(fixedBuffer(task, `Preparazione · ${task.title}`, cursor, end, 0, params.timezone));
+      cursor = end;
+    }
+    if ((task.travelMinutes ?? 0) > 0) {
+      const end = cursor + task.travelMinutes! * MINUTE_MS;
+      blocks.push(
+        fixedBuffer(
+          task,
+          task.location ? `Viaggio verso ${task.location}` : `Viaggio · ${task.title}`,
+          cursor,
+          end,
+          1,
+          params.timezone,
+        ),
+      );
+    }
+    blocks.push({
+      taskId: task.id,
+      title: task.title,
+      start: activityStart,
+      end: activityEnd,
+      kind: 'task',
+      zone: zoneForInstant(activityStart, params.timezone),
+      partIndex: 0,
+      partCount: 1,
+      zoneCompromised: false,
+      area: task.area,
+    });
+    if ((task.recoveryMinutes ?? 0) > 0) {
+      blocks.push(
+        fixedBuffer(
+          task,
+          `Recupero · ${task.title}`,
+          activityEnd,
+          reservationEnd,
+          2,
+          params.timezone,
+        ),
+      );
+    }
+
+    const reservation = { start: preparationStart, end: reservationEnd };
+    reservations.push(reservation);
+    occupied.push(reservation);
+    taskEnd.set(task.id, reservationEnd);
+    placedTasks++;
+  }
+
+  return { blocks, reservations, unplaced, warnings, taskEnd, placedTasks };
+}
+
+function fixedBuffer(
+  task: SchedulableTask,
+  title: string,
+  start: number,
+  end: number,
+  partIndex: number,
+  timezone: string,
+): PlacedBlock {
+  return {
+    taskId: task.id,
+    title,
+    start,
+    end,
+    kind: 'buffer',
+    zone: zoneForInstant(start, timezone),
+    partIndex,
+    partCount: 1,
+    zoneCompromised: false,
+    area: task.area,
   };
 }
 
