@@ -111,8 +111,9 @@ export async function organizeOutcome(
     });
   }
 
+  const simpleCommitment = isSimpleCommitmentRequest(input.outcome);
   const parsed = TaskProposalSetSchema.safeParse(parsedJson);
-  if (!parsed.success) {
+  if (!parsed.success && !simpleCommitment) {
     throw new PlannerError('upstream_rejected', {
       message: `${domainAgent}: ${parsed.error.message.slice(0, 400)}`,
       userMessage: "L'agente ha proposto attività incomplete. Riprova.",
@@ -120,16 +121,19 @@ export async function organizeOutcome(
     });
   }
 
-  const proposalSet = isSimpleCommitmentRequest(input.outcome)
+  const baseProposalSet = parsed.success
+    ? parsed.data
+    : fallbackSimpleCommitmentProposalSet(input.outcome);
+  const proposalSet = simpleCommitment
     ? normalizeSimpleCommitment({
-        proposalSet: parsed.data,
+        proposalSet: baseProposalSet,
         outcome: input.outcome,
         conversation: input.conversation,
         timezone: env.APP_TIMEZONE,
         defaultTravelMinutes:
           domainContext.planningDefaults?.defaultTravelMinutes ?? 20,
       })
-    : parsed.data;
+    : baseProposalSet;
   const proposals = proposalSet.proposals.slice(0, input.maxTasks);
   validateProposalDependencies(proposals);
   const assumptions = [...evidencePack.assumptions, ...proposalSet.assumptions];
@@ -544,6 +548,26 @@ function isSimpleCommitmentRequest(outcome: string): boolean {
     /\b(pianifica|programma|metti|aggiungi|segna|plan|schedule)\b/i.test(outcome) &&
     !/\b(organizza|prepara|ospit|invitati|lista della spesa|budget|host)\b/i.test(outcome)
   );
+}
+
+export function fallbackSimpleCommitmentProposalSet(
+  outcome: string,
+): z.infer<typeof TaskProposalSetSchema> {
+  const title = commitmentTitle(outcome);
+  return TaskProposalSetSchema.parse({
+    summary: `Sto completando i dettagli necessari per pianificare ${title}.`,
+    proposals: [
+      {
+        title,
+        area: 'personal',
+        energy: 'low',
+        priority: 2,
+        estimatedMinutes: 60,
+        flexibility: 'high',
+        evidence: '',
+      },
+    ],
+  });
 }
 
 export function normalizeSimpleCommitment(params: {

@@ -14,6 +14,7 @@ import {
 import {
   buildDomainPrompt,
   commitRequiresInput,
+  fallbackSimpleCommitmentProposalSet,
   normalizeSimpleCommitment,
   reconcileEvidenceRefs,
 } from '../src/agents/orchestrator';
@@ -242,6 +243,16 @@ describe('agent foundation', () => {
     expect(normalized.proposals[0]!.title).toBe('Barbecue');
     expect(normalized.clarifyingQuestion).toBe('A che ora devi essere lì?');
     expect(normalized.unknowns).toEqual(['Orario di inizio di Barbecue']);
+  });
+
+  it('keeps a simple commitment conversation alive when the model output is unusable', () => {
+    const fallback = fallbackSimpleCommitmentProposalSet('domani pianifica barbecue');
+    expect(fallback.proposals).toHaveLength(1);
+    expect(fallback.proposals[0]).toMatchObject({
+      title: 'Barbecue',
+      area: 'personal',
+      estimatedMinutes: 60,
+    });
   });
 
   it('builds the fixed evening only after time, place and duration are answered', () => {
