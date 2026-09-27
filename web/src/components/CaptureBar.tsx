@@ -11,6 +11,41 @@ interface Props {
   onApplied: () => void;
 }
 
+function commitmentSummary(draft: OrganizedOutcome): string {
+  const proposal = draft.proposals[0];
+  if (!proposal?.fixedStartAt || draft.blockingVerificationRequired) {
+    return draft.clarifyingQuestion ?? draft.summary;
+  }
+
+  const start = Date.parse(proposal.fixedStartAt);
+  const preparationStart =
+    start - (proposal.preparationMinutes + proposal.travelMinutes) * 60_000;
+  const departure = start - proposal.travelMinutes * 60_000;
+  const end = start + proposal.estimatedMinutes * 60_000;
+  const clock = (timestamp: number) =>
+    new Intl.DateTimeFormat('it-IT', {
+      timeZone: 'Europe/Rome',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(timestamp);
+  const day = new Intl.DateTimeFormat('it-IT', {
+    timeZone: 'Europe/Rome',
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  }).format(start);
+
+  return [
+    `${proposal.title}: ${day}, dalle ${clock(start)} alle ${clock(end)}`,
+    proposal.location ? `a ${proposal.location}` : null,
+    proposal.preparationMinutes > 0
+      ? `preparazione dalle ${clock(preparationStart)}`
+      : null,
+    proposal.travelMinutes > 0 ? `partenza alle ${clock(departure)}` : null,
+    'Controlla e conferma per inserirlo nel piano.',
+  ].filter(Boolean).join(' · ');
+}
+
 /**
  * Text-and-dictation capture inside the app. The iPhone keyboard's microphone
  * key produces the same Italian dictation the Action Button Shortcut uses, so
@@ -104,7 +139,10 @@ export function CaptureBar({ onApplied }: Props) {
 
       setFeedback({
         tone: data.skipped.length > 0 ? 'warn' : 'info',
-        text: [data.spoken, ...data.skipped].filter(Boolean).join(' · '),
+        text: [
+          data.commitment ? commitmentSummary(data.commitment) : data.spoken,
+          ...data.skipped,
+        ].filter(Boolean).join(' · '),
       });
       onApplied();
     } catch (err) {
@@ -201,7 +239,14 @@ export function CaptureBar({ onApplied }: Props) {
         <input
           ref={inputRef}
           value={text}
-          placeholder={commitment ? 'Rispondi a Dani…' : 'Detta o scrivi…'}
+          placeholder={
+            commitment?.proposal.blockingVerificationRequired
+              ? 'Rispondi a Dani…'
+              : commitment
+                ? 'Conferma o annulla la proposta'
+                : 'Detta o scrivi…'
+          }
+          disabled={Boolean(commitment && !commitment.proposal.blockingVerificationRequired)}
           enterKeyHint="send"
           autoCapitalize="sentences"
           onChange={(e) => setText(e.target.value)}
@@ -209,7 +254,14 @@ export function CaptureBar({ onApplied }: Props) {
             if (e.key === 'Enter') void submit();
           }}
         />
-        <button onClick={() => void submit()} disabled={busy || !text.trim()}>
+        <button
+          onClick={() => void submit()}
+          disabled={
+            busy ||
+            !text.trim() ||
+            Boolean(commitment && !commitment.proposal.blockingVerificationRequired)
+          }
+        >
           {busy ? '…' : 'Invia'}
         </button>
       </div>
