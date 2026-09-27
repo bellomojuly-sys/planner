@@ -10,6 +10,7 @@ import {
   taskSources,
   calendarSources,
   calendarSyncState,
+  calendarEvents,
   type Settings,
 } from '../db/schema';
 import { schedule } from '../scheduler/engine';
@@ -117,7 +118,8 @@ export async function replan(
 
   try {
     const dataIssues = await loadPlanningDataIssues(db, userId, options.syncErrors);
-    if (dataIssues.length > 0) {
+    const dataWarnings = dataIssues.warnings;
+    if (dataIssues.blocking.length > 0) {
       const diff: PlanDiff = {
         created: 0,
         moved: 0,
@@ -129,7 +131,7 @@ export async function replan(
         ],
         warnings: [
           'Il piano non è stato aggiornato perché Notion o Google Calendar non sono sincronizzati.',
-          ...dataIssues,
+          ...dataIssues.blocking,
         ],
         changes: [],
         applied: false,
@@ -224,6 +226,7 @@ export async function replan(
       const diff: PlanDiff = {
         ...preview,
         warnings: [
+          ...dataWarnings,
           ...preview.warnings,
           ...reasons.map(confirmationReasonMessage),
         ],
@@ -257,6 +260,10 @@ export async function replan(
       evaluated,
       calendarRouting,
     );
+
+    if (dataWarnings.length > 0) {
+      diff.warnings = [...dataWarnings, ...diff.warnings];
+    }
 
     await db
       .update(scheduleRuns)
@@ -314,29 +321,49 @@ async function loadSettings(
   };
 }
 
+/**
+ * Splits data problems into the ones that must hold the last plan (`blocking`)
+ * and the ones worth surfacing while still replanning (`warnings`). A failed
+ * feed fetch never deletes the events already stored (see `syncIcsCalendar`),
+ * so a source whose data is cached can still be planned around: a single dead
+ * ICS feed must not freeze the whole planner indefinitely. Only a required
+ * source with no usable data at all is a reason to keep the previous plan.
+ */
 async function loadPlanningDataIssues(
   db: DB,
   userId: string,
   currentErrors: string[] = [],
-): Promise<string[]> {
-  const [notionSources, configuredCalendars, calendarStates] = await Promise.all([
-    db
-      .select()
-      .from(taskSources)
-      .where(and(eq(taskSources.userId, userId), eq(taskSources.enabled, true))),
-    db
-      .select()
-      .from(calendarSources)
-      .where(and(eq(calendarSources.userId, userId), eq(calendarSources.enabled, true))),
-    db
-      .select()
-      .from(calendarSyncState)
-      .where(eq(calendarSyncState.userId, userId)),
-  ]);
+): Promise<{ blocking: string[]; warnings: string[] }> {
+  const [notionSources, configuredCalendars, calendarStates, eventCalendars] =
+    await Promise.all([
+      db
+        .select()
+        .from(taskSources)
+        .where(and(eq(taskSources.userId, userId), eq(taskSources.enabled, true))),
+      db
+        .select()
+        .from(calendarSources)
+        .where(and(eq(calendarSources.userId, userId), eq(calendarSources.enabled, true))),
+      db
+        .select()
+        .from(calendarSyncState)
+        .where(eq(calendarSyncState.userId, userId)),
+      db
+        .selectDistinct({ calendarId: calendarEvents.calendarId })
+        .from(calendarEvents)
+        .where(eq(calendarEvents.userId, userId)),
+    ]);
 
-  const issues = new Set(currentErrors.filter(Boolean));
+  const haveCachedEvents = new Set(eventCalendars.map((row) => row.calendarId));
+  const blocking = new Set<string>();
+  const warnings = new Set(currentErrors.filter(Boolean));
+
   for (const source of notionSources) {
-    if (source.lastSyncError) issues.add(`${source.name}: ${source.lastSyncError}`);
+    if (!source.lastSyncError) continue;
+    const message = `${source.name}: ${source.lastSyncError}`;
+    // A source that has synced before still holds its imported tasks.
+    if (source.lastSyncedAt) warnings.add(message);
+    else blocking.add(message);
   }
 
   // Only calendars that carry commitments are required input. A context
@@ -349,13 +376,24 @@ async function loadPlanningDataIssues(
           .filter((source) => source.role === 'busy' || source.role === 'planner')
           .map((source) => source.calendarId),
   );
+  const calendarLabel = new Map(
+    configuredCalendars.map((source) => [source.calendarId, source.summary]),
+  );
   for (const state of calendarStates) {
-    if (activeCalendarIds.has(state.calendarId) && state.lastError) {
-      issues.add(`${state.calendarId}: ${state.lastError}`);
+    if (!activeCalendarIds.has(state.calendarId) || !state.lastError) continue;
+    const label = calendarLabel.get(state.calendarId) ?? state.calendarId;
+    // A busy calendar whose feed is failing but whose events are already cached
+    // is planned around the saved copy — a broken feed only warns, it does not
+    // block. Without any cached events there is nothing to plan around, so the
+    // last plan is held.
+    if (haveCachedEvents.has(state.calendarId)) {
+      warnings.add(`${label}: uso l’ultimo orario salvato (sincronizzazione non riuscita).`);
+    } else {
+      blocking.add(`${label}: ${state.lastError}`);
     }
   }
 
-  return [...issues];
+  return { blocking: [...blocking], warnings: [...warnings] };
 }
 
 async function loadSchedulableTasks(

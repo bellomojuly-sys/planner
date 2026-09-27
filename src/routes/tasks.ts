@@ -15,6 +15,7 @@ import {
 } from '../services/completion';
 import { resumeTaskScheduling } from '../services/manual-edits';
 import { isTaskSourceEnabled } from '../services/task-source-policy';
+import { inferArea } from '../services/area-classifier';
 
 export const taskRoutes = new Hono<AppBindings>();
 
@@ -78,6 +79,13 @@ taskRoutes.post('/', requireAuth('full'), async (c) => {
   const db = c.get('db');
   const { userId } = c.get('auth');
   const body = TaskInput.parse(await c.req.json());
+
+  // A quick-add left on the default area is routed by its title, so "post
+  // Heemia" lands in Heemia without picking the area by hand. An area chosen on
+  // purpose is kept as-is.
+  if (body.area === 'general') {
+    body.area = inferArea(body.title) ?? 'general';
+  }
 
   const learned = await applyLearning(db, userId, {
     area: body.area,

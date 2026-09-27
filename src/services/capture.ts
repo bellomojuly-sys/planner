@@ -17,6 +17,7 @@ import {
   type Interpretation,
 } from '../integrations/llm';
 import { applyLearning } from '../scheduler/estimate';
+import { inferArea } from './area-classifier';
 import { replan, type RescheduleTrigger } from './planner';
 import {
   completeTaskLocally,
@@ -247,7 +248,12 @@ async function createTask(
   intent: Extract<Intent, { kind: 'create_task' }>,
   language: CaptureLanguage,
 ): Promise<IntentOutcome> {
-  const area = intent.area ?? 'general';
+  // When the model does not commit to an area (or falls back to the generic
+  // one), route by the title so a dictated "post Heemia" still lands in Heemia.
+  const area =
+    intent.area && intent.area !== 'general'
+      ? intent.area
+      : inferArea(intent.title) ?? intent.area ?? 'general';
   const energy = intent.energy ?? 'medium';
   const estimated = intent.estimatedMinutes ?? 30;
 
