@@ -277,6 +277,7 @@ describe('agent foundation', () => {
           dueDate: '2026-09-28',
           fixedStartAt: '2026-09-28T18:00:00+02:00',
           location: 'Downtown',
+          preparationMinutes: 30,
           flexibility: 'fixed',
           dependsOn: [],
           evidence: '',

@@ -632,11 +632,7 @@ export function normalizeSimpleCommitment(params: {
     fixedStartAt,
     location,
     travelMinutes: location ? params.defaultTravelMinutes : 0,
-    preparationMinutes: ready
-      ? selected.preparationMinutes > 0
-        ? selected.preparationMinutes
-        : 40
-      : 0,
+    preparationMinutes: ready ? 40 : 0,
     recoveryMinutes: 0,
     flexibility: fixedStartAt ? 'fixed' : 'high',
     dependsOn: [],
