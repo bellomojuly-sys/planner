@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, ApiError } from '../lib/api';
+import {
+  api,
+  ApiError,
+  type AgentCommitResult,
+  type OrganizedOutcome,
+} from '../lib/api';
 import { enqueueCapture, queueDepth, requestFlush } from '../lib/queue';
 
 interface Props {
@@ -19,6 +24,11 @@ export function CaptureBar({ onApplied }: Props) {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ tone: string; text: string } | null>(null);
   const [pending, setPending] = useState(0);
+  const [commitment, setCommitment] = useState<{
+    outcome: string;
+    conversation: Array<{ role: 'assistant' | 'user'; content: string }>;
+    proposal: OrganizedOutcome;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -38,10 +48,10 @@ export function CaptureBar({ onApplied }: Props) {
   }, [onApplied]);
 
   useEffect(() => {
-    if (!feedback) return;
+    if (!feedback || commitment) return;
     const id = setTimeout(() => setFeedback(null), 6000);
     return () => clearTimeout(id);
-  }, [feedback]);
+  }, [feedback, commitment]);
 
   async function submit() {
     const value = text.trim();
@@ -51,11 +61,46 @@ export function CaptureBar({ onApplied }: Props) {
     setText('');
 
     try {
+      const conversation = commitment
+        ? [
+            ...commitment.conversation,
+            { role: 'user' as const, content: value },
+          ]
+        : [];
       const { data } = await api.post<{
         spoken: string;
         applied: string[];
         skipped: string[];
-      }>('/capture', { text: value, source: 'web' });
+        commitment?: OrganizedOutcome;
+      }>('/capture', {
+        text: value,
+        source: 'web',
+        ...(commitment
+          ? {
+              commitment: {
+                outcome: commitment.outcome,
+                conversation,
+              },
+            }
+          : {}),
+      });
+
+      if (data.commitment) {
+        const nextConversation = data.commitment.clarifyingQuestion
+          ? [
+              ...conversation,
+              {
+                role: 'assistant' as const,
+                content: data.commitment.clarifyingQuestion,
+              },
+            ]
+          : conversation;
+        setCommitment({
+          outcome: commitment?.outcome ?? value,
+          conversation: nextConversation,
+          proposal: data.commitment,
+        });
+      }
 
       setFeedback({
         tone: data.skipped.length > 0 ? 'warn' : 'info',
@@ -65,7 +110,11 @@ export function CaptureBar({ onApplied }: Props) {
     } catch (err) {
       // Network failure — queue it. A validation failure is a real rejection
       // and should be shown, not retried forever.
-      if (err instanceof ApiError && (err.status === 0 || err.status >= 500)) {
+      if (
+        !commitment &&
+        err instanceof ApiError &&
+        (err.status === 0 || err.status >= 500)
+      ) {
         await enqueueCapture(value);
         setPending(await queueDepth());
         setFeedback({
@@ -79,6 +128,26 @@ export function CaptureBar({ onApplied }: Props) {
         });
         setText(value);
       }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function commitProposal() {
+    if (!commitment || commitment.proposal.blockingVerificationRequired || busy) return;
+    setBusy(true);
+    try {
+      const { data } = await api.post<AgentCommitResult>('/agents/commit', {
+        sourceRequestId: commitment.proposal.trace.request.requestId,
+      });
+      setFeedback({ tone: 'info', text: data.confirmation });
+      setCommitment(null);
+      onApplied();
+    } catch (err) {
+      setFeedback({
+        tone: 'error',
+        text: err instanceof ApiError ? err.message : 'Non sono riuscita a pianificarlo.',
+      });
     } finally {
       setBusy(false);
     }
@@ -99,6 +168,31 @@ export function CaptureBar({ onApplied }: Props) {
           >
             {feedback?.text ??
               `${pending} ${pending === 1 ? 'nota' : 'note'} in attesa di connessione.`}
+            {commitment && !commitment.proposal.blockingVerificationRequired && (
+              <button
+                className="btn"
+                data-variant="primary"
+                disabled={busy}
+                onClick={() => void commitProposal()}
+                style={{ marginLeft: '0.75rem' }}
+              >
+                {busy ? 'Pianifico…' : 'Inserisci e pianifica'}
+              </button>
+            )}
+            {commitment && (
+              <button
+                className="btn"
+                disabled={busy}
+                onClick={() => {
+                  setCommitment(null);
+                  setFeedback(null);
+                  setText('');
+                }}
+                style={{ marginLeft: '0.5rem' }}
+              >
+                Annulla
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -107,7 +201,7 @@ export function CaptureBar({ onApplied }: Props) {
         <input
           ref={inputRef}
           value={text}
-          placeholder="Detta o scrivi…"
+          placeholder={commitment ? 'Rispondi a Dani…' : 'Detta o scrivi…'}
           enterKeyHint="send"
           autoCapitalize="sentences"
           onChange={(e) => setText(e.target.value)}

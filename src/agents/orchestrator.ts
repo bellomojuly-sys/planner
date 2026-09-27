@@ -543,10 +543,10 @@ export function commitRequiresInput(
   );
 }
 
-function isSimpleCommitmentRequest(outcome: string): boolean {
+export function isSimpleCommitmentRequest(outcome: string): boolean {
   return (
     /\b(pianifica|programma|metti|aggiungi|segna|plan|schedule)\b/i.test(outcome) &&
-    !/\b(organizza|prepara|ospit|invitati|lista della spesa|budget|host)\b/i.test(outcome)
+    !/\b(organizza|prepara|ospit|invitati|lista della spesa|budget|host|tutti i giorni|ogni giorno|volte (?:a|alla) settimana|giorno s[iì] giorno no)\b/i.test(outcome)
   );
 }
 

@@ -5,6 +5,7 @@ import { requireAuth } from '../auth/middleware';
 import { handleCapture, type CaptureResult } from '../services/capture';
 import { drainOutbox } from '../services/outbox';
 import { loadAgenda, renderVoiceAgenda } from '../jobs/daily';
+import { isSimpleCommitmentRequest, organizeOutcome } from '../agents/orchestrator';
 
 export const captureRoutes = new Hono<AppBindings>();
 
@@ -54,10 +55,53 @@ captureRoutes.post('/', requireAuth('capture'), async (c) => {
       source: z.enum(['action_button', 'web', 'shortcut', 'api']).default('action_button'),
       /** Idempotency key — the Shortcut resends on a flaky connection. */
       clientRequestId: z.string().max(100).optional(),
+      commitment: z
+        .object({
+          outcome: z.string().min(3).max(4000),
+          conversation: z
+            .array(
+              z.object({
+                role: z.enum(['assistant', 'user']),
+                content: z.string().min(1).max(1000),
+              }),
+            )
+            .max(12),
+        })
+        .optional(),
     })
     .parse(await c.req.json());
 
-  const result = await handleCapture(c.env, c.get('db'), c.get('auth').userId, body);
+  const auth = c.get('auth');
+  const conversationalCommitment =
+    body.source === 'web' &&
+    auth.scope === 'full' &&
+    (body.commitment || isSimpleCommitmentRequest(body.text));
+
+  if (conversationalCommitment) {
+    const outcome = body.commitment?.outcome ?? body.text;
+    const conversation = body.commitment?.conversation ?? [];
+    const proposal = await organizeOutcome(c.env, c.get('db'), auth.userId, {
+      outcome,
+      domain: 'personal',
+      conversation,
+      maxTasks: 1,
+    });
+    const spoken = proposal.clarifyingQuestion ??
+      `${proposal.summary} Controlla i dettagli e conferma per inserirlo nel piano.`;
+    return c.json({
+      ok: true,
+      spoken,
+      summary: proposal.summary,
+      applied: [],
+      skipped: [],
+      replanned: false,
+      captureId: null,
+      language: 'it' as const,
+      commitment: proposal,
+    });
+  }
+
+  const result = await handleCapture(c.env, c.get('db'), auth.userId, body);
 
   // Answer questions inline so "cosa devo fare oggi?" works from the lock
   // screen without opening the app.

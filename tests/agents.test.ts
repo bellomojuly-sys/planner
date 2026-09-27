@@ -15,6 +15,7 @@ import {
   buildDomainPrompt,
   commitRequiresInput,
   fallbackSimpleCommitmentProposalSet,
+  isSimpleCommitmentRequest,
   normalizeSimpleCommitment,
   reconcileEvidenceRefs,
 } from '../src/agents/orchestrator';
@@ -253,6 +254,12 @@ describe('agent foundation', () => {
       area: 'personal',
       estimatedMinutes: 60,
     });
+  });
+
+  it('routes simple planning commands into the commitment conversation', () => {
+    expect(isSimpleCommitmentRequest('domani pianifica barbecue')).toBe(true);
+    expect(isSimpleCommitmentRequest('programma la palestra tutti i giorni')).toBe(false);
+    expect(isSimpleCommitmentRequest('organizza un barbecue per venti persone')).toBe(false);
   });
 
   it('builds the fixed evening only after time, place and duration are answered', () => {
