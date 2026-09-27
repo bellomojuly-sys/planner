@@ -164,6 +164,7 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     horizonEnd,
     breakMs,
     busy: input.busy,
+    contexts: input.contexts,
     alreadyScheduled: explicitGym.length,
     completedGymAt: input.completedGymAt ?? [],
     suppressedKeys: input.suppressedKeys ?? new Set(),
@@ -188,7 +189,11 @@ export function schedule(input: ScheduleInput): ScheduleResult {
     timezone,
     gym.chainedCommitmentStarts,
   );
-  const contextBuffers = buildCommitmentBuffers(input.contexts ?? [], timezone);
+  const contextBuffers = buildCommitmentBuffers(
+    input.contexts ?? [],
+    timezone,
+    gym.chainedCommitmentStarts,
+  );
   blocks.push(...commitmentBuffers, ...contextBuffers);
 
   // -------------------------------------------------------------------------
@@ -702,6 +707,7 @@ function placeGymSessions(params: {
   horizonEnd: number;
   breakMs: number;
   busy: ScheduleInput['busy'];
+  contexts: ScheduleInput['contexts'];
   alreadyScheduled: number;
   completedGymAt: number[];
   suppressedKeys: Set<string>;
@@ -716,11 +722,15 @@ function placeGymSessions(params: {
     horizonEnd,
     breakMs,
     busy,
+    contexts,
     alreadyScheduled,
     completedGymAt,
     suppressedKeys,
     pinnedGymAt,
   } = params;
+  // University lectures and other place-bound markers arrive as non-blocking
+  // contexts, not busy: a morning session can still chain into them.
+  const chainTargets = [...busy, ...(contexts ?? [])];
   if (settings.gymSessionsPerWeek <= 0) {
     return { blocks: [], chainedCommitmentStarts };
   }
@@ -992,7 +1002,7 @@ function placeGymSessions(params: {
         // it: shower at the gym and travel gym → venue, dropping the return home
         // and the venue's own home preparation and home → venue journey.
         const dayKey = localDateKey(day, timezone);
-        const nextCommitment = busy
+        const nextCommitment = chainTargets
           .filter(
             (event) =>
               localDateKey(event.start, timezone) === dayKey &&

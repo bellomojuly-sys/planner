@@ -793,6 +793,7 @@ describe('gym', () => {
       end: uniStart + 4 * 3_600_000,
       title: 'Applied GenAI',
       area: 'university' as const,
+      allowedAreas: ['university' as const],
       preparationBeforeMinutes: 60,
       travelBeforeMinutes: 20,
       travelAfterMinutes: 20,
@@ -807,7 +808,7 @@ describe('gym', () => {
         gymPreferredDays: '2',
         gymStartMinutes: 7 * 60,
       },
-      busy: [university],
+      contexts: [university],
     });
 
     const titles = result.blocks.map((b) => b.title);
