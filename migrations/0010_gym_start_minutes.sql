@@ -1,0 +1,1 @@
+ALTER TABLE `settings` ADD `gym_start_minutes` integer DEFAULT 0 NOT NULL;

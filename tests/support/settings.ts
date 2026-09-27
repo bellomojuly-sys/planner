@@ -35,6 +35,7 @@ export const baseSettings: Settings = {
   gymPreparationMinutes: 20,
   gymReturnMinutes: 25,
   gymMinRecoveryHours: 36,
+  gymStartMinutes: 0,
   briefingMinutes: 7 * 60,
   reviewMinutes: 20 * 60 + 30,
   reviewAfterShiftMinutes: 30,

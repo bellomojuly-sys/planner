@@ -751,6 +751,37 @@ function placeGymSessions(params: {
       .filter((key) => key.startsWith('gym:'))
       .map((key) => key.slice(4)),
   ]);
+  const preferredZone: Zone = settings.gymStartMinutes > 0 ? 'morning' : 'evening';
+  const emitSequence = (startAt: number, zone: Zone) => {
+    const components: Array<{
+      title: string;
+      ms: number;
+      kind: PlacedBlock['kind'];
+    }> = [
+      { title: 'Viaggio verso palestra', ms: outwardMs, kind: 'buffer' },
+      { title: 'Palestra', ms: workoutMs, kind: 'gym' },
+      { title: 'Ritorno dalla palestra', ms: returnMs, kind: 'buffer' },
+      { title: 'Doccia / cambio', ms: preparationMs, kind: 'buffer' },
+    ];
+    const partCount = components.filter((item) => item.ms > 0).length;
+    let cursor = startAt;
+    components.forEach((component, partIndex) => {
+      if (component.ms <= 0) return;
+      out.push({
+        taskId: null,
+        title: component.title,
+        start: cursor,
+        end: cursor + component.ms,
+        kind: component.kind,
+        zone,
+        partIndex,
+        partCount,
+        zoneCompromised: zone !== preferredZone,
+      });
+      cursor += component.ms;
+    });
+  };
+
   for (let weekIndex = 0; weekIndex < weekCount; weekIndex++) {
     const target = Math.min(
       settings.gymSessionsPerWeek,
@@ -787,6 +818,7 @@ function placeGymSessions(params: {
         weekKeys.has(localDateKey(event.start, timezone)),
     );
     if (
+      settings.gymStartMinutes === 0 &&
       (perWeek.get(weekIndex) ?? 0) < target &&
       zumba &&
       !settledDays.has(localDateKey(zumba.start, timezone))
@@ -875,14 +907,50 @@ function placeGymSessions(params: {
       if (done >= target) break;
 
       const dayStart = atLocalMinutes(day, timezone, 0);
+      const recoveryFloor =
+        lastWorkoutEnd + settings.gymMinRecoveryHours * 60 * MINUTE_MS;
+
+      if (settings.gymStartMinutes > 0) {
+        // Fixed morning session. The automatic pool never opens before 09:00,
+        // so this is placed as a real-world commitment: it only has to clear
+        // fixed events, the recovery gap and the present moment. The sequence
+        // starts one travel-leg before the requested workout minute so the
+        // workout itself lands on it.
+        const seqStart = atLocalMinutes(
+          day,
+          timezone,
+          settings.gymStartMinutes - settings.gymTravelMinutes,
+        );
+        const seqEnd = seqStart + durationMs;
+        if (seqStart < Math.max(now, recoveryFloor)) continue;
+        if (busy.some((event) => event.start < seqEnd && event.end > seqStart)) {
+          continue;
+        }
+
+        // Reserve any pool time the tail of the sequence reaches into, so no
+        // automatic task is booked on top of the workout.
+        for (const slot of [...pool.list()]) {
+          if (slot.start < seqEnd && slot.end > seqStart) {
+            const overlapStart = Math.max(slot.start, seqStart);
+            pool.consume(
+              slot,
+              overlapStart,
+              Math.min(slot.end, seqEnd) - overlapStart,
+              0,
+            );
+          }
+        }
+
+        emitSequence(seqStart, 'morning');
+        lastWorkoutEnd = seqStart + outwardMs + workoutMs;
+        perWeek.set(weekIndex, done + 1);
+        continue;
+      }
+
       const found = pool.find({
         durationMs,
         breakMs,
-        notBefore: Math.max(
-          now,
-          dayStart,
-          lastWorkoutEnd + settings.gymMinRecoveryHours * 60 * MINUTE_MS,
-        ),
+        notBefore: Math.max(now, dayStart, recoveryFloor),
         notAfter: dayStart + DAY_MS,
         zones: ['evening', 'afternoon'],
         accept: (slot) => !slot.allowedAreas,
@@ -890,32 +958,7 @@ function placeGymSessions(params: {
       if (!found) continue;
 
       pool.consume(found.slot, found.start, durationMs, breakMs);
-      const components: Array<{
-        title: string;
-        ms: number;
-        kind: PlacedBlock['kind'];
-      }> = [
-        { title: 'Viaggio verso palestra', ms: outwardMs, kind: 'buffer' },
-        { title: 'Palestra', ms: workoutMs, kind: 'gym' },
-        { title: 'Ritorno dalla palestra', ms: returnMs, kind: 'buffer' },
-        { title: 'Doccia / cambio', ms: preparationMs, kind: 'buffer' },
-      ];
-      let cursor = found.start;
-      components.forEach((component, partIndex) => {
-        if (component.ms <= 0) return;
-        out.push({
-          taskId: null,
-          title: component.title,
-          start: cursor,
-          end: cursor + component.ms,
-          kind: component.kind,
-          zone: found.slot.zone,
-          partIndex,
-          partCount: components.filter((item) => item.ms > 0).length,
-          zoneCompromised: found.slot.zone !== 'evening',
-        });
-        cursor += component.ms;
-      });
+      emitSequence(found.start, found.slot.zone);
       lastWorkoutEnd = found.start + outwardMs + workoutMs;
       perWeek.set(weekIndex, done + 1);
     }

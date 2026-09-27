@@ -62,6 +62,7 @@ const settings: Settings = {
   gymPreparationMinutes: 20,
   gymReturnMinutes: 25,
   gymMinRecoveryHours: 36,
+  gymStartMinutes: 0,
   briefingMinutes: 7 * 60,
   reviewMinutes: 20 * 60 + 30,
   reviewAfterShiftMinutes: 30,
@@ -754,6 +755,56 @@ describe('gym', () => {
     expect(
       (doorToDoor.at(-1)!.end - doorToDoor[0]!.start) / 60_000,
     ).toBe(145);
+  });
+
+  it('pins the workout to a fixed morning time, before the automatic day', () => {
+    const result = run([], {
+      settingsOverride: {
+        gymSessionsPerWeek: 1,
+        gymMaxSessionsPerWeek: 1,
+        gymPreferredDays: '1',
+        gymStartMinutes: 7 * 60,
+      },
+    });
+
+    const workout = result.blocks.find((b) => b.kind === 'gym')!;
+    expect(localMinutes(workout.start, TZ)).toBe(7 * 60);
+    expect(localMinutes(workout.end, TZ)).toBe(7 * 60 + 75);
+
+    const day = localDateKey(workout.start, TZ);
+    const sequence = result.blocks
+      .filter((b) => localDateKey(b.start, TZ) === day && b.taskId === null)
+      .sort((a, b) => a.start - b.start);
+    expect(sequence.map((b) => b.title)).toEqual([
+      'Viaggio verso palestra',
+      'Palestra',
+      'Ritorno dalla palestra',
+      'Doccia / cambio',
+    ]);
+    // Travel runs before the workout: she leaves 25 minutes earlier.
+    expect(localMinutes(sequence[0]!.start, TZ)).toBe(7 * 60 - 25);
+  });
+
+  it('skips a morning session when a fixed event blocks the slot', () => {
+    // A whole-morning commitment on Wednesday overlaps the fixed 07:00 window,
+    // so no gym is placed that day (it falls to another morning instead).
+    const wednesday = MONDAY + 2 * 86_400_000;
+    const blocker = { start: wednesday - 60 * 60_000, end: wednesday + 3 * 60 * 60_000 };
+    const result = run([], {
+      settingsOverride: {
+        gymSessionsPerWeek: 1,
+        gymMaxSessionsPerWeek: 1,
+        gymPreferredDays: '3',
+        gymStartMinutes: 7 * 60,
+      },
+      busy: [blocker],
+    });
+    const wednesdayGym = result.blocks.find(
+      (b) => b.kind === 'gym' && localDateKey(b.start, TZ) === localDateKey(wednesday, TZ),
+    );
+    expect(wednesdayGym).toBeUndefined();
+    // The session still happens, just on a clear morning.
+    expect(result.blocks.some((b) => b.kind === 'gym')).toBe(true);
   });
 
   it('wraps Monday gym around Zumba and showers after returning home', () => {

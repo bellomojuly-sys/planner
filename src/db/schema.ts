@@ -232,6 +232,10 @@ export const settings = sqliteTable('settings', {
   gymPreparationMinutes: integer('gym_preparation_minutes').notNull().default(20),
   gymReturnMinutes: integer('gym_return_minutes').notNull().default(25),
   gymMinRecoveryHours: integer('gym_min_recovery_hours').notNull().default(36),
+  // Workout start, in minutes from local midnight. 0 keeps the flexible evening
+  // placement; a positive value pins the session to that morning time (e.g. 420
+  // = 07:00), with travel calculated before it and return/shower after.
+  gymStartMinutes: integer('gym_start_minutes').notNull().default(0),
 
   briefingMinutes: integer('briefing_minutes').notNull().default(7 * 60),
   reviewMinutes: integer('review_minutes').notNull().default(20 * 60 + 30),
