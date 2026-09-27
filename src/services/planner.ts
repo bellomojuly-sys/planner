@@ -339,12 +339,23 @@ async function purgeDisabledSourceBlocks(db: DB, userId: string): Promise<void> 
   if (disabledTasks.length === 0) return;
 
   const taskIds = disabledTasks.map((task) => task.id);
-  const blocks = await db
-    .select()
-    .from(scheduledBlocks)
-    .where(
-      and(eq(scheduledBlocks.userId, userId), inArray(scheduledBlocks.taskId, taskIds)),
-    );
+
+  // D1 caps bound parameters per statement (~100), and a disabled source can
+  // own hundreds of tasks, so every `inArray` over task ids is chunked.
+  const CHUNK = 90;
+  const blocks: Array<typeof scheduledBlocks.$inferSelect> = [];
+  for (let i = 0; i < taskIds.length; i += CHUNK) {
+    const rows = await db
+      .select()
+      .from(scheduledBlocks)
+      .where(
+        and(
+          eq(scheduledBlocks.userId, userId),
+          inArray(scheduledBlocks.taskId, taskIds.slice(i, i + CHUNK)),
+        ),
+      );
+    blocks.push(...rows);
+  }
 
   if (blocks.length > 0) {
     const fallbackCalendar = await getPlannerCalendarId(db, userId);
@@ -360,22 +371,27 @@ async function purgeDisabledSourceBlocks(db: DB, userId: string): Promise<void> 
         });
       }
     }
-    await db
-      .delete(scheduledBlocks)
-      .where(inArray(scheduledBlocks.id, blocks.map((block) => block.id)));
+    const blockIds = blocks.map((block) => block.id);
+    for (let i = 0; i < blockIds.length; i += CHUNK) {
+      await db
+        .delete(scheduledBlocks)
+        .where(inArray(scheduledBlocks.id, blockIds.slice(i, i + CHUNK)));
+    }
   }
 
   // Leave the backlog consistent so a later re-enable replans cleanly.
-  await db
-    .update(tasks)
-    .set({ status: 'todo' })
-    .where(
-      and(
-        eq(tasks.userId, userId),
-        inArray(tasks.id, taskIds),
-        eq(tasks.status, 'scheduled'),
-      ),
-    );
+  for (let i = 0; i < taskIds.length; i += CHUNK) {
+    await db
+      .update(tasks)
+      .set({ status: 'todo' })
+      .where(
+        and(
+          eq(tasks.userId, userId),
+          inArray(tasks.id, taskIds.slice(i, i + CHUNK)),
+          eq(tasks.status, 'scheduled'),
+        ),
+      );
+  }
 }
 
 /**
