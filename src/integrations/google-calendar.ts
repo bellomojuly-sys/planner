@@ -672,8 +672,13 @@ export async function deletePlannerEvent(
       'google.deleteEvent',
     );
   } catch (err) {
-    // Already gone is the desired end state.
-    if (err instanceof PlannerError && err.code === 'not_found') return;
+    // Already gone is the desired end state: a 404 Not Found, or a 410 Gone that
+    // calFetch labels an expired sync token. A DELETE cannot invalidate a list
+    // sync token — a 410 here just means the event is already deleted, so the
+    // job has succeeded rather than failed.
+    if (err instanceof PlannerError && (err.code === 'not_found' || isSyncTokenExpired(err))) {
+      return;
+    }
     throw err;
   }
 }

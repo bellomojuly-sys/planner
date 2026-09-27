@@ -80,6 +80,11 @@ const IntentSchema = z.discriminatedUnion('kind', [
     itemQuery: z.string(),
   }),
   z.object({
+    kind: z.literal('set_gym_cadence'),
+    /** How many gym sessions per week Giulia wants. "Every day" is 7. */
+    sessionsPerWeek: z.number().int().min(0).max(7),
+  }),
+  z.object({
     kind: z.literal('question'),
     question: z.string(),
     /** Requested agenda day, resolved from "oggi", "domani" or a weekday. */
@@ -192,6 +197,7 @@ const JSON_SCHEMA = {
               'add_dependency',
               'add_shopping_item',
               'complete_shopping_item',
+              'set_gym_cadence',
               'question',
               'unclear',
             ],
@@ -235,6 +241,11 @@ const JSON_SCHEMA = {
           category: { type: 'string' },
           store: { type: 'string' },
           itemQuery: { type: 'string' },
+          sessionsPerWeek: {
+            type: 'integer',
+            description:
+              'Sessioni di palestra a settimana per set_gym_cadence. "Tutti i giorni" = 7, "un giorno sì un giorno no" ≈ 4, "smetti/niente palestra" = 0.',
+          },
           question: { type: 'string' },
           date: {
             type: 'string',
@@ -278,6 +289,7 @@ COME INTERPRETARE
 - "prima di X devo fare Y", "X dipende da Y" → add_dependency.
 - "compra X", "finito il latte", "serve X", "buy X", "add X to my shopping list" → add_shopping_item.
 - "preso il pane", "comprato X" → complete_shopping_item.
+- "programma la palestra tutti i giorni", "vai in palestra ogni giorno", "palestra 5 volte a settimana", "voglio allenarmi 4 volte a settimana", "smetti di programmare la palestra" → set_gym_cadence con sessionsPerWeek (tutti i giorni = 7, un giorno sì un giorno no ≈ 4, niente palestra = 0). NON create_task: è un'impostazione di frequenza, non un'attività da svolgere.
 - Tutto il resto che descrive qualcosa da fare → create_task.
 - Se la frase è una domanda sul piano ("cosa devo fare oggi?", "cosa devo fare lunedì?", "what do I have to do today?", "what is my plan for Monday?") → question. Compila sempre date con il giorno richiesto in formato YYYY-MM-DD; se non viene detto un giorno, usa oggi.
 - Se davvero non è chiaro cosa intende, usa unclear e spiega perché nella lingua della richiesta.

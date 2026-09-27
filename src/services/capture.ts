@@ -8,6 +8,7 @@ import {
   scheduledBlocks,
   captures,
   outbox,
+  settings as settingsTable,
   type Task,
 } from '../db/schema';
 import {
@@ -18,6 +19,7 @@ import {
 } from '../integrations/llm';
 import { applyLearning } from '../scheduler/estimate';
 import { inferArea } from './area-classifier';
+import { gymCadence } from './gym-cadence';
 import { replan, type RescheduleTrigger } from './planner';
 import {
   completeTaskLocally,
@@ -229,6 +231,8 @@ async function applyIntent(
       return addShoppingItem(db, userId, intent, language);
     case 'complete_shopping_item':
       return completeShoppingItem(db, userId, intent, language);
+    case 'set_gym_cadence':
+      return setGymCadence(db, userId, intent, language);
     case 'question':
       return { answer: intent.question, answerDate: intent.date };
     case 'unclear':
@@ -239,6 +243,40 @@ async function applyIntent(
             : `Non ho capito: ${intent.reason}`,
       });
   }
+}
+
+async function setGymCadence(
+  db: DB,
+  userId: string,
+  intent: Extract<Intent, { kind: 'set_gym_cadence' }>,
+  language: CaptureLanguage,
+): Promise<IntentOutcome> {
+  const plan = gymCadence(intent.sessionsPerWeek);
+  await db
+    .update(settingsTable)
+    .set({
+      gymSessionsPerWeek: plan.sessionsPerWeek,
+      gymMaxSessionsPerWeek: plan.maxSessionsPerWeek,
+      gymPreferredDays: plan.preferredDays,
+      gymMinRecoveryHours: plan.minRecoveryHours,
+    })
+    .where(eq(settingsTable.userId, userId));
+
+  const n = plan.sessionsPerWeek;
+  const message =
+    n === 0
+      ? language === 'en'
+        ? 'Gym removed from the plan.'
+        : 'Palestra tolta dal piano.'
+      : n === 7
+        ? language === 'en'
+          ? 'Gym set to every day.'
+          : 'Palestra impostata tutti i giorni.'
+        : language === 'en'
+          ? `Gym set to ${n} times a week.`
+          : `Palestra impostata ${n} volte a settimana.`;
+
+  return { message, trigger: 'manual' };
 }
 
 async function createTask(
