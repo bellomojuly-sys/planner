@@ -12,6 +12,7 @@ import { replan } from '../services/planner';
 import {
   CommitProposalInputSchema,
   OrganizeOutcomeInputSchema,
+  PHASE_ONE_CONTEXT_POLICY,
   TaskProposalSetSchema,
   SpecialistRequestSchema,
   SpecialistTraceSchema,
@@ -54,7 +55,7 @@ export async function organizeOutcome(
       ...domainContext.sourceRefs,
       ...input.conversation.map((_, index) => `user:conversation:${index + 1}`),
     ],
-    allowedSources: ['d1', 'curated_profile', 'settings', 'user_input'],
+    allowedSources: [...PHASE_ONE_CONTEXT_POLICY.approvedSources],
     allowedCapabilities: DOMAIN_PROFILES[domainAgent].capabilities,
     authority: 'propose',
     privacyClass: domainAgent === 'university-context' ? 'personal' : 'sensitive',
@@ -64,56 +65,67 @@ export async function organizeOutcome(
   });
 
   const today = localDateKey(Date.now(), env.APP_TIMEZONE);
-  const content = await chat(env, `agent.${domainAgent}.organize`, {
-    max_tokens: 4096,
-    response_format: { type: 'json_object' },
-    messages: [
-      {
-        role: 'system',
-        content: buildDomainPrompt(
-          domainAgent,
-          DOMAIN_AGENT_INSTRUCTIONS[domainAgent],
-          profile.defaultArea,
-          today,
-          input.maxTasks,
-        ),
-      },
-      {
-        role: 'user',
-        content: JSON.stringify({
-          outcome: input.outcome,
-          constraints: input.constraints ?? null,
-          conversation: input.conversation,
-          request,
-          domainContext: {
-            projectFocus: domainContext.projectFocus,
-            projectFocuses: domainContext.projectFocuses,
-            curatedProfile: domainContext.curatedProfile,
-            curatedProfiles: domainContext.curatedProfiles,
-            operationalTasks: domainContext.operationalTasks,
-            planningDefaults: domainContext.planningDefaults,
-            retrieval: domainContext.retrieval,
-          },
-          evidencePack,
-        }),
-      },
-    ],
-  });
+  const simpleCommitment = isSimpleCommitmentRequest(input.outcome);
 
+  // A simple fixed commitment — the "pianifica il barbecue" dialogue — is fully
+  // resolved by normalizeSimpleCommitment below, so it must not depend on the
+  // model being reachable. A DeepSeek outage, an empty reply or invalid JSON
+  // then falls back to the deterministic draft instead of failing the whole
+  // capture with a 500. Only the richer multi-task decomposition still needs a
+  // valid model response.
   let parsedJson: unknown;
   try {
-    parsedJson = JSON.parse(content);
-  } catch {
-    throw new PlannerError('upstream_rejected', {
-      message: `${domainAgent}: invalid json`,
-      userMessage: "L'agente non ha restituito un piano valido. Riprova.",
-      retryable: true,
+    const content = await chat(env, `agent.${domainAgent}.organize`, {
+      max_tokens: 4096,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: buildDomainPrompt(
+            domainAgent,
+            DOMAIN_AGENT_INSTRUCTIONS[domainAgent],
+            profile.defaultArea,
+            today,
+            input.maxTasks,
+          ),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            outcome: input.outcome,
+            constraints: input.constraints ?? null,
+            conversation: input.conversation,
+            request,
+            domainContext: {
+              projectFocus: domainContext.projectFocus,
+              projectFocuses: domainContext.projectFocuses,
+              curatedProfile: domainContext.curatedProfile,
+              curatedProfiles: domainContext.curatedProfiles,
+              operationalTasks: domainContext.operationalTasks,
+              planningDefaults: domainContext.planningDefaults,
+              retrieval: domainContext.retrieval,
+            },
+            evidencePack,
+          }),
+        },
+      ],
     });
+    parsedJson = JSON.parse(content);
+  } catch (err) {
+    if (!simpleCommitment) {
+      if (err instanceof PlannerError) throw err;
+      throw new PlannerError('upstream_rejected', {
+        message: `${domainAgent}: invalid json or unreachable`,
+        userMessage: "L'agente non ha restituito un piano valido. Riprova.",
+        retryable: true,
+      });
+    }
+    parsedJson = undefined;
   }
 
-  const simpleCommitment = isSimpleCommitmentRequest(input.outcome);
-  const parsed = TaskProposalSetSchema.safeParse(parsedJson);
-  if (!parsed.success && !simpleCommitment) {
+  const parsed =
+    parsedJson === undefined ? null : TaskProposalSetSchema.safeParse(parsedJson);
+  if (parsed && !parsed.success && !simpleCommitment) {
     throw new PlannerError('upstream_rejected', {
       message: `${domainAgent}: ${parsed.error.message.slice(0, 400)}`,
       userMessage: "L'agente ha proposto attività incomplete. Riprova.",
@@ -121,7 +133,7 @@ export async function organizeOutcome(
     });
   }
 
-  const baseProposalSet = parsed.success
+  const baseProposalSet = parsed?.success
     ? parsed.data
     : fallbackSimpleCommitmentProposalSet(input.outcome);
   const proposalSet = simpleCommitment
@@ -544,9 +556,24 @@ export function commitRequiresInput(
 }
 
 export function isSimpleCommitmentRequest(outcome: string): boolean {
+  const excluded =
+    /\b(organizza|prepara|ospit|invitati|lista della spesa|budget|host|tutti i giorni|ogni giorno|volte (?:a|alla) settimana|giorno s[iì] giorno no)\b/i.test(
+      outcome,
+    );
+  if (excluded) return false;
+
+  if (/\b(pianifica|programma|metti|aggiungi|segna|plan|schedule)\b/i.test(outcome)) {
+    return true;
+  }
+
+  // People often enter a commitment as a compact noun phrase ("Barbecue alle
+  // sei") rather than as a command. Route common calendar commitments through
+  // the same confirmation dialogue so the exact time can never be reduced to
+  // a due date by generic capture.
   return (
-    /\b(pianifica|programma|metti|aggiungi|segna|plan|schedule)\b/i.test(outcome) &&
-    !/\b(organizza|prepara|ospit|invitati|lista della spesa|budget|host|tutti i giorni|ogni giorno|volte (?:a|alla) settimana|giorno s[iì] giorno no)\b/i.test(outcome)
+    /\b(barbecue|cena|pranzo|aperitivo|festa|compleanno|appuntamento|dentista|medico|visita|riunione|meeting|call|evento|concerto|lezione|esame)\b/i.test(
+      outcome,
+    ) && hasTimeHint(outcome)
   );
 }
 
@@ -658,6 +685,10 @@ function commitmentTitle(outcome: string): string {
   const cleaned = outcome
     .replace(/\b(oggi|domani|dopodomani)\b/gi, '')
     .replace(/\b(pianifica|programma|metti|aggiungi|segna|plan|schedule)\b/gi, '')
+    .replace(
+      /\b(?:circa\s+)?(?:alle(?:\s+ore)?|ore|at)\s+(?:\d{1,2}(?::\d{2})?|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici)\b/gi,
+      '',
+    )
     .replace(/\s+/g, ' ')
     .trim();
   if (!cleaned) return 'questo impegno';

@@ -21,6 +21,19 @@ export type DomainAgentId =
   | 'work-portfolio'
   | 'personal-admin';
 
+/**
+ * Phase-1 is deliberately closed over Dani's own state. Adding a provider here
+ * is an authority change, not an implementation detail: it requires a later
+ * explicit decision and a new acceptance run.
+ */
+export const PHASE_ONE_CONTEXT_POLICY = {
+  version: 'phase-1-v1',
+  approvedSources: ['d1', 'curated_profile', 'settings', 'user_input'],
+  deniedByDefault: ['notion', 'obsidian', 'web', 'email'],
+  provenanceRequired: true,
+  externalContextIngestion: false,
+} as const;
+
 export interface AgentDefinition {
   id: AgentId;
   name: string;

@@ -6,6 +6,7 @@ import {
   DOMAIN_PROFILES,
   agentRuntimeStatus,
 } from '../agents/registry';
+import { PHASE_ONE_CONTEXT_POLICY } from '../agents/contracts';
 import { commitProposalSet, organizeOutcome } from '../agents/orchestrator';
 
 export const agentRoutes = new Hono<AppBindings>();
@@ -19,6 +20,7 @@ agentRoutes.get('/', (c) => {
     taskLedger: 'd1',
     calendarAuthority: 'reality-planner',
     a2a: 'reserved_for_independent_boundaries',
+    contextPolicy: PHASE_ONE_CONTEXT_POLICY,
     agents: AGENT_REGISTRY.map((agent) => ({
       ...agent,
       runtimeStatus: agentRuntimeStatus(agent.id, deepseekConfigured),

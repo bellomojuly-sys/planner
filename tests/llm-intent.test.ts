@@ -75,4 +75,46 @@ describe('Voice intent contract', () => {
       expect(parsed.data.intents[0]).toMatchObject({ date: '2026-09-21' });
     }
   });
+
+  it('preserves an exact commitment start instead of reducing it to a due date', () => {
+    const parsed = validateInterpretation({
+      language: 'it',
+      summary: 'Registro il barbecue come impegno fisso.',
+      intents: [
+        {
+          kind: 'create_task',
+          title: 'Barbecue',
+          fixedStartAt: '2026-09-28T18:00:00+02:00',
+          dueAt: '2026-09-28',
+          flexibility: 'fixed',
+          area: 'personal',
+          estimatedMinutes: 180,
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.intents[0]).toMatchObject({
+        fixedStartAt: '2026-09-28T18:00:00+02:00',
+        flexibility: 'fixed',
+      });
+    }
+  });
+
+  it('rejects an exact commitment start without a timezone offset', () => {
+    const parsed = validateInterpretation({
+      language: 'it',
+      summary: 'Registro il barbecue.',
+      intents: [
+        {
+          kind: 'create_task',
+          title: 'Barbecue',
+          fixedStartAt: '2026-09-28T18:00:00',
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(false);
+  });
 });

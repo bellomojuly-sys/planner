@@ -19,7 +19,7 @@ import {
 } from '../integrations/llm';
 import { applyLearning } from '../scheduler/estimate';
 import { inferArea } from './area-classifier';
-import { gymCadence } from './gym-cadence';
+import { gymCadence, gymStartMinutesFromText } from './gym-cadence';
 import { replan, type RescheduleTrigger } from './planner';
 import {
   completeTaskLocally,
@@ -126,6 +126,7 @@ export async function handleCapture(
           intent,
           timezone,
           interpretation.language,
+          input.text,
         );
         if (outcome.message) applied.push(outcome.message);
         if (outcome.answer) answer = outcome.answer;
@@ -220,6 +221,7 @@ async function applyIntent(
   intent: Intent,
   timezone: string,
   language: CaptureLanguage,
+  rawText: string,
 ): Promise<IntentOutcome> {
   switch (intent.kind) {
     case 'create_task':
@@ -237,7 +239,7 @@ async function applyIntent(
     case 'complete_shopping_item':
       return completeShoppingItem(db, userId, intent, language);
     case 'set_gym_cadence':
-      return setGymCadence(db, userId, intent, language);
+      return setGymCadence(db, userId, intent, language, rawText);
     case 'question':
       return { answer: intent.question, answerDate: intent.date };
     case 'unclear':
@@ -255,8 +257,13 @@ async function setGymCadence(
   userId: string,
   intent: Extract<Intent, { kind: 'set_gym_cadence' }>,
   language: CaptureLanguage,
+  rawText: string,
 ): Promise<IntentOutcome> {
   const plan = gymCadence(intent.sessionsPerWeek);
+  // Only touch the workout time when Giulia actually said when ("alla mattina",
+  // "alle 7", "la sera"); otherwise her stored morning/evening choice stands.
+  const startMinutes =
+    plan.sessionsPerWeek > 0 ? gymStartMinutesFromText(rawText) : null;
   await db
     .update(settingsTable)
     .set({
@@ -264,11 +271,12 @@ async function setGymCadence(
       gymMaxSessionsPerWeek: plan.maxSessionsPerWeek,
       gymPreferredDays: plan.preferredDays,
       gymMinRecoveryHours: plan.minRecoveryHours,
+      ...(startMinutes !== null ? { gymStartMinutes: startMinutes } : {}),
     })
     .where(eq(settingsTable.userId, userId));
 
   const n = plan.sessionsPerWeek;
-  const message =
+  const cadenceMessage =
     n === 0
       ? language === 'en'
         ? 'Gym removed from the plan.'
@@ -281,7 +289,45 @@ async function setGymCadence(
           ? `Gym set to ${n} times a week.`
           : `Palestra impostata ${n} volte a settimana.`;
 
-  return { message, trigger: 'manual' };
+  let timeMessage = '';
+  if (n > 0 && startMinutes !== null) {
+    if (startMinutes > 0) {
+      const clock = formatMinutesOfDay(startMinutes);
+      timeMessage =
+        language === 'en'
+          ? ` In the morning at ${clock}.`
+          : ` Al mattino alle ${clock}.`;
+    } else {
+      timeMessage = language === 'en' ? ' In the evening.' : ' Alla sera.';
+    }
+  }
+
+  return { message: cadenceMessage + timeMessage, trigger: 'manual' };
+}
+
+/** "420" → "07:00", for spoken and on-screen confirmations. */
+function formatMinutesOfDay(minutes: number): string {
+  const hh = Math.floor(minutes / 60)
+    .toString()
+    .padStart(2, '0');
+  const mm = (minutes % 60).toString().padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function parseRequiredIsoInstant(
+  value: string,
+  language: CaptureLanguage,
+): number {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new PlannerError('bad_request', {
+      userMessage:
+        language === 'en'
+          ? 'I understood the commitment, but not its exact date and time.'
+          : "Ho capito l'impegno, ma non la data e l'orario esatti.",
+    });
+  }
+  return timestamp;
 }
 
 async function createTask(
@@ -308,6 +354,9 @@ async function createTask(
   });
 
   const dueAt = intent.dueAt ? parseIsoLoose(intent.dueAt) : null;
+  const fixedStartAt = intent.fixedStartAt
+    ? parseRequiredIsoInstant(intent.fixedStartAt, language)
+    : null;
 
   const [created] = await db
     .insert(tasks)
@@ -322,12 +371,13 @@ async function createTask(
       plannedMinutes: learned.plannedMinutes,
       estimateSource: 'claude',
       estimateConfidence: learned.confidence,
-      dueAt,
+      dueAt: dueAt ?? fixedStartAt,
+      fixedStartAt,
       location: intent.location ?? null,
       travelMinutes: intent.travelMinutes ?? 0,
       preparationMinutes: intent.preparationMinutes ?? 0,
       recoveryMinutes: intent.recoveryMinutes ?? 0,
-      flexibility: intent.flexibility ?? 'high',
+      flexibility: fixedStartAt ? 'fixed' : (intent.flexibility ?? 'high'),
       status: 'todo',
       isGym: /palestra|allenamento|gym|corsa|nuoto/i.test(intent.title),
       dirty: true,

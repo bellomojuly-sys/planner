@@ -3,6 +3,7 @@ import {
   AGENT_IDS,
   CommitProposalInputSchema,
   OrganizeOutcomeInputSchema,
+  PHASE_ONE_CONTEXT_POLICY,
   SpecialistTraceSchema,
   TaskProposalSetSchema,
 } from '../src/agents/contracts';
@@ -31,6 +32,20 @@ describe('agent foundation', () => {
     expect(AGENT_REGISTRY.map((agent) => agent.id)).toEqual([...AGENT_IDS]);
     expect(new Set(AGENT_REGISTRY.map((agent) => agent.id)).size).toBe(AGENT_IDS.length);
     expect(AGENT_REGISTRY.every((agent) => agent.status === 'registered')).toBe(true);
+  });
+
+  it('keeps Phase-1 context on the approved least-privilege source list', () => {
+    expect(PHASE_ONE_CONTEXT_POLICY.approvedSources).toEqual([
+      'd1',
+      'curated_profile',
+      'settings',
+      'user_input',
+    ]);
+    expect(PHASE_ONE_CONTEXT_POLICY.deniedByDefault).toEqual(
+      expect.arrayContaining(['notion', 'obsidian', 'web', 'email']),
+    );
+    expect(PHASE_ONE_CONTEXT_POLICY.externalContextIngestion).toBe(false);
+    expect(PHASE_ONE_CONTEXT_POLICY.provenanceRequired).toBe(true);
   });
 
   it('routes explicit and obvious domain outcomes', () => {
@@ -258,8 +273,23 @@ describe('agent foundation', () => {
 
   it('routes simple planning commands into the commitment conversation', () => {
     expect(isSimpleCommitmentRequest('domani pianifica barbecue')).toBe(true);
+    expect(isSimpleCommitmentRequest('domani barbecue alle sei')).toBe(true);
     expect(isSimpleCommitmentRequest('programma la palestra tutti i giorni')).toBe(false);
     expect(isSimpleCommitmentRequest('organizza un barbecue per venti persone')).toBe(false);
+  });
+
+  it('keeps a compact timed commitment title free of the spoken clock', () => {
+    const normalized = normalizeSimpleCommitment({
+      proposalSet: fallbackSimpleCommitmentProposalSet('domani barbecue alle sei'),
+      outcome: 'domani barbecue alle sei',
+      conversation: [],
+      timezone: 'Europe/Rome',
+      defaultTravelMinutes: 20,
+    });
+
+    expect(normalized.proposals[0]!.title).toBe('Barbecue');
+    expect(normalized.proposals[0]!.fixedStartAt).toContain('T16:00:00.000Z');
+    expect(normalized.clarifyingQuestion).toBe('Dove devi andare?');
   });
 
   it('builds the fixed evening only after time, place and duration are answered', () => {

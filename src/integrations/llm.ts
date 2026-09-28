@@ -36,6 +36,8 @@ const IntentSchema = z.discriminatedUnion('kind', [
     preparationMinutes: z.number().int().min(0).max(240).optional(),
     recoveryMinutes: z.number().int().min(0).max(240).optional(),
     flexibility: z.enum(['fixed', 'low', 'medium', 'high']).optional(),
+    /** Exact externally imposed start, including the local UTC offset. */
+    fixedStartAt: z.string().datetime({ offset: true }).optional(),
     /** ISO date or a relative phrase already resolved by the model. */
     dueAt: z.string().optional(),
     dependsOnTitles: z.array(z.string()).optional(),
@@ -219,6 +221,11 @@ const JSON_SCHEMA = {
             type: 'string',
             enum: ['fixed', 'low', 'medium', 'high'],
           },
+          fixedStartAt: {
+            type: 'string',
+            description:
+              'Istante ISO 8601 completo di offset per un impegno con orario esterno imposto, per esempio 2026-09-28T18:00:00+02:00.',
+          },
           dueAt: {
             type: 'string',
             description: 'Data ISO 8601 (YYYY-MM-DD o completa).',
@@ -302,6 +309,7 @@ Per ogni create_task stima sempre area, energy, priority, estimatedMinutes e fle
 - priority 1 solo se c'è una scadenza imminente o lo dice esplicitamente ("urgente", "subito").
 - estimatedMinutes: sii realistica, arrotonda a multipli di 15. Non stimare mai meno di 10 minuti.
 - flexibility fixed solo per un orario esterno già imposto; low per attività difficili da spostare; medium/high per lavoro flessibile.
+- Se Giulia indica un orario preciso per un appuntamento o impegno ("barbecue alle sei", "dentista domani alle 9"), compila fixedStartAt con data, ora e offset Europe/Rome e usa flexibility fixed. dueAt da solo non conserva l'orario.
 - travelMinutes è il viaggio di andata. preparationMinutes include preparazione necessaria prima; recoveryMinutes include doccia, cambio o decompressione dopo.
 
 DATE
