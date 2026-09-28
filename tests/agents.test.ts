@@ -292,6 +292,25 @@ describe('agent foundation', () => {
     expect(normalized.clarifyingQuestion).toBe('Dove devi andare?');
   });
 
+  it('reads the location from the first answer when the opening phrase already has a time', () => {
+    const normalized = normalizeSimpleCommitment({
+      proposalSet: fallbackSimpleCommitmentProposalSet('domani barbecue alle sei'),
+      outcome: 'domani barbecue alle sei',
+      conversation: [
+        { role: 'assistant', content: 'Dove devi andare?' },
+        { role: 'user', content: 'Al Downtown.' },
+      ],
+      timezone: 'Europe/Rome',
+      defaultTravelMinutes: 20,
+    });
+
+    expect(normalized.proposals[0]!.location).toBe('Downtown');
+    expect(normalized.proposals[0]!.travelMinutes).toBe(20);
+    expect(normalized.clarifyingQuestion).toBe(
+      'Fino a che ora vuoi tenere libera la serata?',
+    );
+  });
+
   it('builds the fixed evening only after time, place and duration are answered', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-27T10:00:00.000Z'));

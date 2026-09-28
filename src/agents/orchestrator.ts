@@ -620,7 +620,7 @@ export function normalizeSimpleCommitment(params: {
   const fixedStartAt = hasDeclaredTime
     ? deriveFixedStart(params.outcome, userAnswers, params.timezone)
     : null;
-  const explicitLocation = hasLocationHint(params.outcome) || userAnswers.length >= 2;
+  const explicitLocation = hasLocationHint(declarations);
   const location = explicitLocation
     ? extractLocation([...userAnswers, params.outcome].join(' '))
     : null;
