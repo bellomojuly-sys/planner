@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { agendaAnchor, renderCaptureOutcome } from '../src/routes/capture';
+import {
+  agendaAnchor,
+  renderActionButtonCommitment,
+  renderCaptureOutcome,
+} from '../src/routes/capture';
 import { spokenArea } from '../src/services/capture';
 
 describe('voice capture response', () => {
@@ -78,5 +82,73 @@ describe('voice capture response', () => {
         skipped: ['Unexpected error. Try again.'],
       }),
     ).toBe('I did not save the request: Unexpected error. Try again.');
+  });
+
+  it('returns one spoken question and an opaque session id to the Action Button', () => {
+    const rendered = renderActionButtonCommitment({
+      summary: 'Completo i dettagli.',
+      clarifyingQuestion: 'Dove devi andare?',
+      blockingVerificationRequired: true,
+      proposals: [
+        {
+          title: 'Barbecue',
+          notes: '',
+          area: 'personal',
+          energy: 'low',
+          priority: 2,
+          estimatedMinutes: 300,
+          dueDate: '2026-09-29',
+          fixedStartAt: '2026-09-29T18:00:00+02:00',
+          location: null,
+          travelMinutes: 0,
+          preparationMinutes: 0,
+          recoveryMinutes: 0,
+          flexibility: 'fixed',
+          dependsOn: [],
+          evidence: '',
+        },
+      ],
+      trace: { request: { requestId: '06cd59bd-3662-4cd4-8a05-cf6d2a421ffe' } },
+    });
+
+    expect(rendered).toEqual({
+      state: 'needs_input',
+      sessionId: '06cd59bd-3662-4cd4-8a05-cf6d2a421ffe',
+      spoken: 'Dove devi andare?',
+    });
+  });
+
+  it('reads the door-to-door preview before the Action Button can confirm', () => {
+    const rendered = renderActionButtonCommitment({
+      summary: 'Barbecue pronto.',
+      clarifyingQuestion: null,
+      blockingVerificationRequired: false,
+      proposals: [
+        {
+          title: 'Barbecue',
+          notes: '',
+          area: 'personal',
+          energy: 'low',
+          priority: 2,
+          estimatedMinutes: 300,
+          dueDate: '2026-09-29',
+          fixedStartAt: '2026-09-29T18:00:00+02:00',
+          location: 'Downtown',
+          travelMinutes: 20,
+          preparationMinutes: 40,
+          recoveryMinutes: 0,
+          flexibility: 'fixed',
+          dependsOn: [],
+          evidence: '',
+        },
+      ],
+      trace: { request: { requestId: '06cd59bd-3662-4cd4-8a05-cf6d2a421ffe' } },
+    });
+
+    expect(rendered.state).toBe('ready');
+    expect(rendered.spoken).toContain('dalle 18:00 alle 23:00');
+    expect(rendered.spoken).toContain('preparazione dalle 17:00');
+    expect(rendered.spoken).toContain('partenza alle 17:40');
+    expect(rendered.spoken).toContain('Vuoi inserirlo e pianificarlo?');
   });
 });

@@ -23,20 +23,79 @@ dalla stessa schermata.
 
 ---
 
-## 2. Crea il Comando Rapido
+## 2. Ricrea il Comando Rapido conversazionale
+
+Il vecchio comando `POST /api/capture/text` continua a funzionare per le note
+singole. Per ricevere domande come «Dove devi andare?» e confermare il piano dal
+Tasto Azione, ricrea una volta il comando usando
+`POST /api/capture/action-button`.
+
+Non aggiungere **Mostra notifica**: la sola risposta utente è **Leggi testo**, in
+modo da non ricevere due notifiche per la stessa azione.
+
+### Blocco iniziale
 
 App **Comandi** → **+** → aggiungi queste azioni nell'ordine:
 
-| # | Azione | Impostazioni |
-|---|--------|--------------|
-| 1 | **Detta testo** | Lingua: **Predefinita** (non Italiano) · Interrompi ascolto: *Dopo una pausa* |
-| 2 | **Rileva lingua** | Testo: *Testo dettato* |
-| 3 | **Ottieni contenuto dell'URL** | vedi sotto |
-| 4 | **Se** *Lingua* **contiene** `it` | ramo italiano |
-| 5 | **Leggi testo** | Testo: il risultato dell'azione 3 · Lingua: Italiano · Voce: Alice |
-| 6 | **Altrimenti** | ramo inglese |
-| 7 | **Leggi testo** | Testo: il risultato dell'azione 3 · Lingua: Inglese · Voce: Samantha |
-| 8 | **Fine Se** | |
+1. **Detta testo**
+   - Lingua: **Predefinita**.
+   - Interrompi ascolto: **Dopo una pausa**.
+2. **Rileva lingua** sul `Testo dettato` e salva il risultato nella variabile
+   `Lingua iniziale`.
+3. **Ottieni contenuto dell'URL**:
+   - URL: `https://giulia-personal-planner.giulia-planner.workers.dev/api/capture/action-button`
+   - Metodo: `POST`
+   - Intestazione `Authorization`: `Bearer IL_TUO_TOKEN`
+   - Intestazione `Content-Type`: `application/json`
+   - Corpo JSON:
+     - `action` = `start`
+     - `text` = variabile `Testo dettato`
+4. **Imposta variabile** `Risposta Dani` sul risultato di **Ottieni contenuto dell'URL**.
+
+### Ciclo delle domande
+
+5. Aggiungi **Ripeti 3 volte**. Dentro al ciclo:
+   1. **Ottieni valore dizionario** `state` da `Risposta Dani`.
+   2. **Se** il valore è `needs_input`:
+      - ottieni `spoken` da `Risposta Dani`;
+      - usa il blocco voce descritto sotto per leggerlo;
+      - **Detta testo** con lingua **Predefinita**;
+      - ottieni `sessionId` da `Risposta Dani`;
+      - **Ottieni contenuto dell'URL** sullo stesso URL, con le stesse intestazioni e corpo JSON:
+        - `action` = `reply`
+        - `sessionId` = il valore appena ottenuto
+        - `text` = il nuovo `Testo dettato`;
+      - **Imposta variabile** `Risposta Dani` sul nuovo risultato.
+   3. Chiudi **Se** e **Ripeti**.
+
+Tre cicli coprono le domande massime della Fase 1: orario, luogo e durata.
+
+### Conferma finale
+
+6. Ottieni `state` da `Risposta Dani`.
+7. **Se** `state` è `ready`:
+   - ottieni e leggi `spoken`;
+   - aggiungi **Scegli dal menu** con `Conferma` e `Annulla`;
+   - nel ramo `Conferma`, richiama lo stesso URL con:
+     - `action` = `confirm`
+     - `sessionId` = valore `sessionId` di `Risposta Dani`;
+   - nel ramo `Annulla`, richiama lo stesso URL con:
+     - `action` = `cancel`
+     - `sessionId` = valore `sessionId` di `Risposta Dani`;
+   - imposta nuovamente `Risposta Dani` sul risultato della chiamata;
+   - ottieni e leggi `spoken` una sola volta.
+8. **Altrimenti**, se lo stato iniziale era già `done`, ottieni e leggi subito
+   `spoken`: è il caso di note normali, completamenti e domande sull'agenda.
+
+### Blocco voce da riutilizzare
+
+Ogni volta che le istruzioni dicono «leggi `spoken`»:
+
+1. **Se** `Lingua iniziale` contiene `it`:
+   - **Leggi testo**, lingua Italiano (Italia), voce **Alice**.
+2. **Altrimenti**:
+   - **Leggi testo**, lingua Inglese (Stati Uniti), voce **Samantha**.
+3. **Fine Se**.
 
 **Perché la lingua della dettatura non va fissata su Italiano.** Con
 «Lingua: Italiano» il riconoscimento vocale trascrive l'inglese come se fosse
@@ -47,19 +106,8 @@ capisce anche le frasi miste.
 **Perché «contiene» e non «è».** «Rileva lingua» può restituire `it`,
 `it_IT` o il nome della lingua: «contiene it» funziona in tutti questi casi.
 
-Le azioni 5 e 7 fanno parlare Planner: leggono a voce cosa ha fatto e, se hai
-fatto una domanda, il programma del giorno richiesto, nella lingua in cui
-hai parlato. Se preferisci non sentire la risposta, usa **Mostra notifica**
-al loro posto.
-
-Configurazione dell'azione 2 (tocca ▸ per aprire i dettagli):
-
-- **URL**: `https://TUO-WORKER.workers.dev/api/capture/text`
-- **Metodo**: `POST`
-- **Intestazioni**:
-  - `Authorization` → `Bearer IL_TUO_TOKEN`
-  - `Content-Type` → `text/plain`
-- **Corpo della richiesta**: `File` → seleziona la variabile **Testo dettato**
+Il blocco voce fa parlare Dani: legge cosa ha fatto e, se hai fatto una
+domanda, il programma del giorno richiesto, nella lingua in cui hai parlato.
 
 Il valore di `Authorization` è `Bearer`, uno spazio e il token intero (43
 caratteri, può contenere trattini). Se il server risponde `unauthorized`, il
@@ -118,13 +166,15 @@ Due modi per evitarlo:
 Da terminale, per controllare che token e URL siano corretti:
 
 ```bash
-curl -X POST https://TUO-WORKER.workers.dev/api/capture/text \
+curl -X POST https://giulia-personal-planner.giulia-planner.workers.dev/api/capture/action-button \
   -H "Authorization: Bearer IL_TUO_TOKEN" \
-  -H "Content-Type: text/plain" \
-  --data "Devo comprare il pane e chiamare il dentista domani"
+  -H "Content-Type: application/json" \
+  --data '{"action":"start","text":"Domani pianifica barbecue"}'
 ```
 
-La risposta è una riga di testo in italiano che elenca cosa è stato fatto.
+La risposta è JSON. `state` vale `needs_input`, `ready` oppure `done`; il
+Shortcut legge `spoken` e conserva soltanto l'opaque `sessionId` necessario a
+continuare o confermare la propria proposta.
 
 ---
 

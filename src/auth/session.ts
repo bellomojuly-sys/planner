@@ -106,8 +106,9 @@ async function resolveSession(
 
 /**
  * Bearer tokens are how the iPhone Shortcut authenticates. The `capture` scope
- * can only reach POST /api/capture — losing the phone does not expose the
- * planner.
+ * can only reach the capture namespace. Its conversational endpoint may
+ * continue or approve only the token owner's immutable, expiring proposal;
+ * losing the phone still does not expose the task ledger or settings.
  */
 async function resolveApiToken(
   db: DB,

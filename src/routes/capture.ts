@@ -5,7 +5,14 @@ import { requireAuth } from '../auth/middleware';
 import { handleCapture, type CaptureResult } from '../services/capture';
 import { drainOutbox } from '../services/outbox';
 import { loadAgenda, renderVoiceAgenda } from '../jobs/daily';
-import { isSimpleCommitmentRequest, organizeOutcome } from '../agents/orchestrator';
+import {
+  cancelCommitmentProposal,
+  commitProposalSet,
+  continueCommitmentProposal,
+  isSimpleCommitmentRequest,
+  organizeOutcome,
+} from '../agents/orchestrator';
+import type { TaskProposal } from '../agents/contracts';
 
 export const captureRoutes = new Hono<AppBindings>();
 
@@ -40,6 +47,90 @@ export function agendaAnchor(requestedDate: string | undefined, now = Date.now()
   const anchor = Date.parse(`${requestedDate}T12:00:00Z`);
   return Number.isFinite(anchor) ? anchor : now;
 }
+
+interface CommitmentPreview {
+  summary: string;
+  clarifyingQuestion: string | null;
+  blockingVerificationRequired: boolean;
+  proposals: TaskProposal[];
+  trace: { request: { requestId: string } };
+}
+
+export function renderActionButtonCommitment(
+  proposal: CommitmentPreview,
+  timezone = 'Europe/Rome',
+) {
+  const sessionId = proposal.trace.request.requestId;
+  if (proposal.blockingVerificationRequired) {
+    return {
+      state: 'needs_input' as const,
+      sessionId,
+      spoken: proposal.clarifyingQuestion ?? 'Mi serve un dettaglio in più.',
+    };
+  }
+
+  const fixed = proposal.proposals.find((item) => item.fixedStartAt);
+  if (!fixed?.fixedStartAt) {
+    return {
+      state: 'ready' as const,
+      sessionId,
+      spoken: `${proposal.summary} Vuoi inserirlo e pianificarlo?`,
+    };
+  }
+  return {
+    state: 'ready' as const,
+    sessionId,
+    spoken: renderFixedCommitmentPreview(fixed, timezone),
+  };
+}
+
+function renderFixedCommitmentPreview(
+  proposal: TaskProposal,
+  timezone: string,
+): string {
+  const start = Date.parse(proposal.fixedStartAt!);
+  const end = start + proposal.estimatedMinutes * 60_000;
+  const preparationStart =
+    start - (proposal.preparationMinutes + proposal.travelMinutes) * 60_000;
+  const departure = start - proposal.travelMinutes * 60_000;
+  const clock = (timestamp: number) =>
+    new Intl.DateTimeFormat('it-IT', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(timestamp);
+  const day = new Intl.DateTimeFormat('it-IT', {
+    timeZone: timezone,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  }).format(start);
+  const parts = [
+    `${proposal.title}: ${day}, dalle ${clock(start)} alle ${clock(end)}`,
+    proposal.location ? `a ${proposal.location}` : null,
+    proposal.preparationMinutes > 0
+      ? `preparazione dalle ${clock(preparationStart)}`
+      : null,
+    proposal.travelMinutes > 0 ? `partenza alle ${clock(departure)}` : null,
+    'Vuoi inserirlo e pianificarlo?',
+  ];
+  return parts.filter(Boolean).join('. ');
+}
+
+const ActionButtonRequestSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('start'),
+    text: z.string().min(1).max(2000),
+    clientRequestId: z.string().max(100).optional(),
+  }),
+  z.object({
+    action: z.literal('reply'),
+    sessionId: z.string().uuid(),
+    text: z.string().min(1).max(1000),
+  }),
+  z.object({ action: z.literal('confirm'), sessionId: z.string().uuid() }),
+  z.object({ action: z.literal('cancel'), sessionId: z.string().uuid() }),
+]);
 
 /**
  * The iPhone Action Button endpoint.
@@ -136,6 +227,93 @@ captureRoutes.post('/', requireAuth('capture'), async (c) => {
     replanned: result.replanned,
     captureId: result.captureId,
     language: result.language,
+  });
+});
+
+/**
+ * Stateful JSON endpoint for the Action Button Shortcut. The capture token can
+ * continue and approve only its own immutable, expiring proposal; it still
+ * cannot read the task ledger, settings or arbitrary agent proposals.
+ *
+ * Non-commitment commands use the existing one-shot capture path so the same
+ * Shortcut also keeps completing tasks and answering agenda questions.
+ */
+captureRoutes.post('/action-button', requireAuth('capture'), async (c) => {
+  const body = ActionButtonRequestSchema.parse(await c.req.json());
+  const db = c.get('db');
+  const userId = c.get('auth').userId;
+
+  if (body.action === 'reply') {
+    const proposal = await continueCommitmentProposal(c.env, db, userId, {
+      sourceRequestId: body.sessionId,
+      answer: body.text,
+    });
+    return c.json({ ok: true, ...renderActionButtonCommitment(proposal, c.env.APP_TIMEZONE) });
+  }
+
+  if (body.action === 'confirm') {
+    const committed = await commitProposalSet(c.env, db, userId, {
+      sourceRequestId: body.sessionId,
+    });
+    return c.json({
+      ok: true,
+      state: 'done' as const,
+      sessionId: body.sessionId,
+      spoken: committed.confirmation,
+      committed: true,
+    });
+  }
+
+  if (body.action === 'cancel') {
+    await cancelCommitmentProposal(db, userId, body.sessionId);
+    return c.json({
+      ok: true,
+      state: 'done' as const,
+      sessionId: body.sessionId,
+      spoken: 'Va bene, non ho cambiato il piano.',
+      committed: false,
+    });
+  }
+
+  if (isSimpleCommitmentRequest(body.text)) {
+    const proposal = await organizeOutcome(c.env, db, userId, {
+      outcome: body.text,
+      domain: 'personal',
+      conversation: [],
+      maxTasks: 1,
+    });
+    return c.json({ ok: true, ...renderActionButtonCommitment(proposal, c.env.APP_TIMEZONE) });
+  }
+
+  const result = await handleCapture(c.env, db, userId, {
+    text: body.text,
+    source: 'shortcut',
+    clientRequestId: body.clientRequestId,
+  });
+  let spoken = renderCaptureOutcome(result);
+  if (result.answer) {
+    const agenda = await loadAgenda(
+      db,
+      userId,
+      c.env.APP_TIMEZONE,
+      agendaAnchor(result.answerDate),
+    );
+    const agendaSpeech = renderVoiceAgenda(
+      agenda,
+      c.env.APP_TIMEZONE,
+      Date.now(),
+      result.language,
+    );
+    const changed = result.applied.length > 0 || result.skipped.length > 0;
+    spoken = changed ? `${renderCaptureOutcome(result)}. ${agendaSpeech}` : agendaSpeech;
+  }
+  c.executionCtx.waitUntil(drainOutbox(c.env, db));
+  return c.json({
+    ok: true,
+    state: 'done' as const,
+    sessionId: null,
+    spoken,
+    committed: result.applied.length > 0,
   });
 });
 

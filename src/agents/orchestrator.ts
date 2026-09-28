@@ -28,6 +28,12 @@ const StoredProposalSchema = TaskProposalSetSchema.extend({
   taskIds: z.array(z.string().uuid()).min(1).max(12),
   blockingVerificationRequired: z.boolean(),
   sourceGaps: z.array(z.string().max(500)).max(20),
+  conversation: z.array(
+    z.object({
+      role: z.enum(['assistant', 'user']),
+      content: z.string().min(1).max(1000),
+    }),
+  ).max(12).optional(),
 });
 
 export async function organizeOutcome(
@@ -232,6 +238,7 @@ export async function organizeOutcome(
     request,
     taskIds: proposals.map(() => crypto.randomUUID()),
     blockingVerificationRequired,
+    conversation: input.conversation,
   });
   const expiresAt = Date.now() + PROPOSAL_TTL_MS;
   await db.insert(agentProposals).values({
@@ -269,6 +276,114 @@ export async function organizeOutcome(
     trace,
     committed: false,
   };
+}
+
+/**
+ * Continues a capture-scoped commitment without giving the phone general read
+ * access. The only accepted state is a still-pending proposal owned by the
+ * same user; the previous immutable proposal is cancelled after its answer has
+ * produced the next one.
+ */
+export async function continueCommitmentProposal(
+  env: Env,
+  db: DB,
+  userId: string,
+  rawInput: unknown,
+) {
+  const input = z.object({
+    sourceRequestId: z.string().uuid(),
+    answer: z.string().min(1).max(1000),
+  }).parse(rawInput);
+  const [stored] = await db
+    .select()
+    .from(agentProposals)
+    .where(
+      and(
+        eq(agentProposals.id, input.sourceRequestId),
+        eq(agentProposals.userId, userId),
+      ),
+    )
+    .limit(1);
+  if (!stored) throw new PlannerError('not_found');
+  if (stored.status !== 'pending' || stored.expiresAt <= Date.now()) {
+    throw new PlannerError('conflict', {
+      userMessage: 'Questa conversazione è scaduta. Premi di nuovo il tasto Azione.',
+    });
+  }
+
+  const previous = StoredProposalSchema.parse(stored.payload);
+  if (!previous.blockingVerificationRequired || !previous.clarifyingQuestion) {
+    throw new PlannerError('conflict', {
+      userMessage: 'La proposta è già pronta: confermala oppure annullala.',
+    });
+  }
+  const priorConversation = previous.conversation ?? [];
+  if (priorConversation.length > 10) {
+    throw new PlannerError('conflict', {
+      userMessage: 'La conversazione è troppo lunga. Ricomincia con una frase più precisa.',
+    });
+  }
+
+  const domain = stored.domainAgent === 'university-context'
+    ? 'university'
+    : stored.domainAgent === 'work-portfolio'
+      ? 'work'
+      : 'personal';
+  const next = await organizeOutcome(env, db, userId, {
+    outcome: previous.request.userGoal,
+    domain,
+    conversation: [
+      ...priorConversation,
+      { role: 'assistant', content: previous.clarifyingQuestion },
+      { role: 'user', content: input.answer },
+    ],
+    maxTasks: 1,
+  });
+  await db
+    .update(agentProposals)
+    .set({ status: 'cancelled' })
+    .where(
+      and(
+        eq(agentProposals.id, stored.id),
+        eq(agentProposals.userId, userId),
+        eq(agentProposals.status, 'pending'),
+      ),
+    );
+  return next;
+}
+
+export async function cancelCommitmentProposal(
+  db: DB,
+  userId: string,
+  sourceRequestId: string,
+): Promise<void> {
+  const [stored] = await db
+    .select({ status: agentProposals.status })
+    .from(agentProposals)
+    .where(
+      and(
+        eq(agentProposals.id, sourceRequestId),
+        eq(agentProposals.userId, userId),
+      ),
+    )
+    .limit(1);
+  if (!stored) throw new PlannerError('not_found');
+  if (stored.status === 'cancelled' || stored.status === 'expired') return;
+  if (stored.status === 'committed') {
+    throw new PlannerError('conflict', {
+      userMessage: 'Questa proposta è già stata inserita nel piano.',
+    });
+  }
+  await db
+    .update(agentProposals)
+    .set({ status: 'cancelled' })
+    .where(
+      and(
+        eq(agentProposals.id, sourceRequestId),
+        eq(agentProposals.userId, userId),
+        eq(agentProposals.status, 'pending'),
+      ),
+    );
 }
 
 export async function commitProposalSet(
